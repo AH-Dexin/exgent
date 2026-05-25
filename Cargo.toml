@@ -1,0 +1,13 @@
+[workspace]
+members = [
+	"crates/exgent-ai",
+	"crates/exgent-core",
+	"crates/exgent",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/earendil-works/pi-mono"

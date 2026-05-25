@@ -1,0 +1,11 @@
+/home/xudx/Projects/Code/exgent/target/armv7-unknown-linux-gnueabihf/release/deps/hyper_rustls-2dc4c3d26ea2a22a.d: /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/lib.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/config.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector/builder.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/stream.rs
+
+/home/xudx/Projects/Code/exgent/target/armv7-unknown-linux-gnueabihf/release/deps/libhyper_rustls-2dc4c3d26ea2a22a.rlib: /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/lib.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/config.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector/builder.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/stream.rs
+
+/home/xudx/Projects/Code/exgent/target/armv7-unknown-linux-gnueabihf/release/deps/libhyper_rustls-2dc4c3d26ea2a22a.rmeta: /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/lib.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/config.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector/builder.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/stream.rs
+
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/lib.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/config.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/connector/builder.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-rustls-0.27.9/src/stream.rs:

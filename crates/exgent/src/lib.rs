@@ -1,0 +1,16 @@
+pub mod app;
+pub mod auth;
+pub mod cli;
+pub mod commands;
+pub mod config;
+pub mod localization;
+pub mod model_service;
+pub mod models;
+pub mod oauth;
+mod persistence;
+pub mod session;
+pub mod session_service;
+pub mod settings;
+pub mod system_prompt;
+pub mod tools;
+pub mod tui;

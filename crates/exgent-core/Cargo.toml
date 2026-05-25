@@ -1,0 +1,12 @@
+[package]
+name = "exgent-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+exgent-ai = { path = "../exgent-ai" }
+
+[lib]
+path = "src/lib.rs"

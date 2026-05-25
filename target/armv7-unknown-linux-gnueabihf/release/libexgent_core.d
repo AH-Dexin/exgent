@@ -1,0 +1,1 @@
+/home/xudx/Projects/Code/exgent/target/armv7-unknown-linux-gnueabihf/release/libexgent_core.rlib: /home/xudx/Projects/Code/exgent/crates/exgent-ai/src/generated_models.json /home/xudx/Projects/Code/exgent/crates/exgent-ai/src/lib.rs /home/xudx/Projects/Code/exgent/crates/exgent-core/src/lib.rs

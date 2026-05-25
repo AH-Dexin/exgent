@@ -1,0 +1,27 @@
+[package]
+name = "exgent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+crossterm = "0.29.0"
+exgent-ai = { path = "../exgent-ai" }
+exgent-core = { path = "../exgent-core" }
+base64 = "0.22"
+rand = "0.8"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+unicode-width = "0.2"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "exgent"
+path = "src/main.rs"

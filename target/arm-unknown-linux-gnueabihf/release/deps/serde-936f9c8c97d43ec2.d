@@ -1,0 +1,14 @@
+/home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/deps/serde-936f9c8c97d43ec2.d: /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/build/serde-82be77bbafe92682/out/private.rs
+
+/home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/deps/libserde-936f9c8c97d43ec2.rlib: /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/build/serde-82be77bbafe92682/out/private.rs
+
+/home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/deps/libserde-936f9c8c97d43ec2.rmeta: /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/build/serde-82be77bbafe92682/out/private.rs
+
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/xudx/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/build/serde-82be77bbafe92682/out/private.rs:
+
+# env-dep:OUT_DIR=/home/xudx/Projects/Code/exgent/target/arm-unknown-linux-gnueabihf/release/build/serde-82be77bbafe92682/out
