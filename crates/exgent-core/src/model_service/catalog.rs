@@ -1,6 +1,6 @@
 use std::env;
 
-use exgent_ai::{Model, SubscriptionProvider};
+use crate::ai::{Model, SubscriptionProvider};
 
 use crate::{
     auth::AuthStore,

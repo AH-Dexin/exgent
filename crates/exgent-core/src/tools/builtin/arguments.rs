@@ -1,6 +1,6 @@
 use std::io;
 
-use exgent_ai::ToolCall;
+use crate::ai::ToolCall;
 use serde_json::Value;
 
 pub(super) fn required_argument<'a>(call: &'a ToolCall, name: &str) -> io::Result<&'a str> {

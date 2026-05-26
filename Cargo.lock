@@ -306,22 +306,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "exgent-ai"
-version = "0.0.1"
-dependencies = [
- "base64",
- "reqwest",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "exgent-core"
 version = "0.0.1"
 dependencies = [
  "base64",
  "chrono",
- "exgent-ai",
  "rand 0.8.6",
  "reqwest",
  "serde",

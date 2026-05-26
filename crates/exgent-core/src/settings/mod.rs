@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use exgent_ai::Model;
+use crate::ai::Model;
 use serde::{Deserialize, Serialize};
 
 use crate::{

@@ -4,7 +4,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use exgent_ai::ToolCall;
+use crate::ai::ToolCall;
 
 use super::{
     arguments::{optional_bool_argument, optional_string_argument, optional_usize_argument},

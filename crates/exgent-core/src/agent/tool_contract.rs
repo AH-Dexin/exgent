@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use exgent_ai::{ChatMessage, ToolCall, ToolDefinition};
+use crate::ai::{ChatMessage, ToolCall, ToolDefinition};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolExecutionResult {

@@ -1,12 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError},
-        Arc,
-    },
-    time::Duration,
-};
+use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use reqwest::Url;
@@ -18,7 +10,7 @@ use super::{
     callback::{oauth_callback_host, start_callback_server},
     current_time_millis,
     pkce::{create_oauth_state, create_pkce_challenge, create_pkce_verifier},
-    AuthorizationCode,
+    AuthorizationCode, PkceOAuthFlow,
 };
 
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -30,39 +22,6 @@ const OPENAI_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const OPENAI_CODEX_SCOPES: &str = "openid profile email offline_access";
 const OPENAI_CODEX_JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 
-#[derive(Debug)]
-pub struct OpenAiCodexOAuthFlow {
-    pub url: String,
-    verifier: String,
-    state: String,
-    redirect_uri: String,
-    callback: Receiver<Result<AuthorizationCode, String>>,
-    cancel_callback: Arc<AtomicBool>,
-}
-
-impl OpenAiCodexOAuthFlow {
-    pub fn wait_for_callback(&self, timeout: Duration) -> Result<AuthorizationCode, String> {
-        self.poll_callback(timeout)?
-            .ok_or_else(|| "timed out waiting for OAuth callback".to_string())
-    }
-
-    pub fn poll_callback(&self, timeout: Duration) -> Result<Option<AuthorizationCode>, String> {
-        match self.callback.recv_timeout(timeout) {
-            Ok(result) => result.map(Some),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err("OAuth callback server stopped unexpectedly".to_string())
-            }
-        }
-    }
-}
-
-impl Drop for OpenAiCodexOAuthFlow {
-    fn drop(&mut self) {
-        self.cancel_callback.store(true, Ordering::Relaxed);
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct OpenAiCodexTokenResponse {
     access_token: String,
@@ -70,7 +29,7 @@ struct OpenAiCodexTokenResponse {
     expires_in: i64,
 }
 
-pub fn start_openai_codex_oauth_flow() -> Result<OpenAiCodexOAuthFlow, String> {
+pub fn start_openai_codex_oauth_flow() -> Result<PkceOAuthFlow, String> {
     let verifier = create_pkce_verifier();
     let challenge = create_pkce_challenge(&verifier);
     let state = create_oauth_state();
@@ -97,18 +56,18 @@ pub fn start_openai_codex_oauth_flow() -> Result<OpenAiCodexOAuthFlow, String> {
         .append_pair("codex_cli_simplified_flow", "true")
         .append_pair("originator", "exgent");
 
-    Ok(OpenAiCodexOAuthFlow {
-        url: url.to_string(),
+    Ok(PkceOAuthFlow::new(
+        url.to_string(),
         verifier,
         state,
-        redirect_uri: OPENAI_CODEX_REDIRECT_URI.to_string(),
-        callback: callback.receiver,
-        cancel_callback: callback.cancel,
-    })
+        OPENAI_CODEX_REDIRECT_URI.to_string(),
+        callback.receiver,
+        callback.cancel,
+    ))
 }
 
 pub fn finish_openai_codex_oauth_flow(
-    flow: &OpenAiCodexOAuthFlow,
+    flow: &PkceOAuthFlow,
     authorization: AuthorizationCode,
 ) -> Result<OAuthCredential, String> {
     if !authorization.state.is_empty() && authorization.state != flow.state {
@@ -127,7 +86,7 @@ fn exchange_openai_codex_authorization_code(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<OAuthCredential, String> {
-    let client = exgent_ai::shared_blocking_client();
+    let client = crate::ai::shared_blocking_client();
     let response = client
         .post(OPENAI_CODEX_TOKEN_URL)
         .header(reqwest::header::ACCEPT, "application/json")

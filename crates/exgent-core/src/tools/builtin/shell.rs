@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use exgent_ai::ToolCall;
+use crate::ai::ToolCall;
 
 use super::{arguments::required_argument, ToolOutput};
 use crate::cancel::CancelToken;

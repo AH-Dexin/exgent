@@ -1,6 +1,5 @@
 [workspace]
 members = [
-	"crates/exgent-ai",
 	"crates/exgent",
 	"crates/exgent-core",
 	"crates/exgent-tui",

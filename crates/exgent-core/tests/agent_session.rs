@@ -8,10 +8,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use exgent_ai::ToolCall;
 use exgent_core::{
     AgentEvent, AgentHooks, AgentLoopConfig, AgentSessionEvent, AppRuntimeHost, CancelToken,
-    RuntimeOptions, ToolExecutionResult, TurnTelemetry,
+    RuntimeOptions, ToolCall, ToolExecutionResult, TurnTelemetry,
 };
 
 fn fixture(name: &str) -> PathBuf {

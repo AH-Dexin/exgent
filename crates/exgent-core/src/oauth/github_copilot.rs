@@ -62,7 +62,7 @@ pub fn start_github_copilot_device_flow(
 ) -> Result<GithubDeviceFlow, String> {
     let domain = enterprise_domain.unwrap_or("github.com").to_string();
     let urls = github_urls(&domain);
-    let client = exgent_ai::shared_blocking_client();
+    let client = crate::ai::shared_blocking_client();
     let response = client
         .post(urls.device_code_url)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -134,7 +134,7 @@ where
     F: FnMut(&str) -> bool,
 {
     let urls = github_urls(&flow.domain);
-    let client = exgent_ai::shared_blocking_client();
+    let client = crate::ai::shared_blocking_client();
     let mut interval_seconds = flow.interval_seconds.max(1);
     let deadline = std::time::Instant::now() + Duration::from_secs(flow.expires_in_seconds);
 
@@ -205,7 +205,7 @@ pub fn refresh_github_copilot_token(
 ) -> Result<OAuthCredential, String> {
     let domain = enterprise_domain.unwrap_or("github.com");
     let urls = github_urls(domain);
-    let client = exgent_ai::shared_blocking_client();
+    let client = crate::ai::shared_blocking_client();
     let response = client
         .get(urls.copilot_token_url)
         .header(reqwest::header::ACCEPT, "application/json")

@@ -5,6 +5,7 @@
 //! [`AppRuntimeHost`] and the types re-exported below. Anything not listed here
 //! is internal and may change between releases.
 
+pub(crate) mod ai;
 mod agent;
 mod auth;
 mod cancel;
@@ -19,7 +20,6 @@ mod runtime;
 mod session;
 mod settings;
 mod storage;
-mod system_prompt;
 mod tools;
 
 pub use agent::{
@@ -30,7 +30,7 @@ pub use auth::OAuthCredential;
 pub use cancel::CancelToken;
 pub use config::{AgentLoopConfig, RuntimeOptions};
 pub use error::{AgentSessionError, ModelServiceError, PersistenceError};
-pub use exgent_ai::ImageContent;
+pub use ai::{ImageContent, ToolCall};
 pub use localization::{resolve_locale, tr, LanguageOption, Locale, MessageId, LANGUAGE_OPTIONS};
 pub use models::CompatibleModelKind;
 pub use oauth::{
@@ -65,5 +65,6 @@ pub mod sdk {
     pub use crate::config::{AgentLoopConfig, RuntimeOptions};
     pub use crate::error::{AgentSessionError, ModelServiceError, PersistenceError};
     pub use crate::runtime::AppRuntimeHost;
+    pub use crate::ai::ToolCall;
     pub use crate::tools::{Tool, ToolOutput, ToolRegistry};
 }

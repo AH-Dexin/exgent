@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use std::sync::Arc;
 
-use exgent_ai::{
+use crate::ai::{
     ChatMessage, DynamicProvider, ImageContent, Model, TokenUsage, ToolCall, ToolDefinition,
 };
 
@@ -11,9 +11,9 @@ use crate::{
     config::RuntimeOptions,
     model_service::no_model_configured_message,
     session::{MessagePreview, SessionInfo, SessionService},
-    system_prompt::build_system_prompt_for_cwd,
     tools::ToolRegistry,
 };
+use super::system_prompt::build_system_prompt_for_cwd;
 
 use super::{
     Agent, AgentEvent, NoHooks, NoTools, SharedAgentHooks, ToolExecutionResult, ToolExecutor,
@@ -563,10 +563,10 @@ fn build_model_compaction_prompt(messages: &[ChatMessage]) -> String {
     for message in messages {
         prompt.push_str("- ");
         prompt.push_str(match message.role {
-            exgent_ai::MessageRole::System => "system",
-            exgent_ai::MessageRole::User => "user",
-            exgent_ai::MessageRole::Assistant => "assistant",
-            exgent_ai::MessageRole::Tool => "tool",
+            crate::ai::MessageRole::System => "system",
+            crate::ai::MessageRole::User => "user",
+            crate::ai::MessageRole::Assistant => "assistant",
+            crate::ai::MessageRole::Tool => "tool",
         });
         if !message.tool_calls.is_empty() {
             let calls = message

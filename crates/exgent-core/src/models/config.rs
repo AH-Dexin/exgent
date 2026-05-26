@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use exgent_ai::{Model, ModelCost};
+use crate::ai::{Model, ModelCost};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]

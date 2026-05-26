@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use exgent_ai::{DynamicProvider, ImageContent, Model};
+use crate::ai::{DynamicProvider, ImageContent, Model};
 
 use crate::{
     agent::{Agent, AgentSession, AgentSessionEvent, SharedAgentHooks},
@@ -106,7 +106,7 @@ impl AppRuntime {
     #[cfg(test)]
     fn new_with_provider_registry(
         options: RuntimeOptions,
-        provider_registry: exgent_ai::ProviderRegistry,
+        provider_registry: crate::ai::ProviderRegistry,
     ) -> Result<Self, String> {
         let model_service = ModelService::load_with_provider_registry(&options, provider_registry)?;
         Self::from_new_session(options, model_service, current_working_directory())
@@ -116,7 +116,7 @@ impl AppRuntime {
     fn open_existing_session_with_provider_registry(
         options: RuntimeOptions,
         path: &Path,
-        provider_registry: exgent_ai::ProviderRegistry,
+        provider_registry: crate::ai::ProviderRegistry,
     ) -> Result<Self, String> {
         let model_service = ModelService::load_with_provider_registry(&options, provider_registry)?;
         Self::from_existing_session(options, model_service, path)
@@ -391,20 +391,20 @@ mod tests {
     #[derive(Clone, Debug)]
     struct LoopWriteProvider;
 
-    impl exgent_ai::ProviderAdapter for LoopWriteProvider {
+    impl crate::ai::ProviderAdapter for LoopWriteProvider {
         fn stream_events(
             &self,
-            request: exgent_ai::ProviderRequest,
-            emit: &mut dyn FnMut(exgent_ai::ProviderEvent),
+            request: crate::ai::ProviderRequest,
+            emit: &mut dyn FnMut(crate::ai::ProviderEvent),
         ) {
-            emit(exgent_ai::ProviderEvent::Start);
-            emit(exgent_ai::ProviderEvent::ToolCall(
-                exgent_ai::ToolCall::new(format!("call_{}", request.messages.len()), "write")
+            emit(crate::ai::ProviderEvent::Start);
+            emit(crate::ai::ProviderEvent::ToolCall(
+                crate::ai::ToolCall::new(format!("call_{}", request.messages.len()), "write")
                     .with_argument("path", "side-effect.txt")
                     .with_argument("content", "changed"),
             ));
-            emit(exgent_ai::ProviderEvent::Done(Box::new(
-                exgent_ai::AssistantMessage {
+            emit(crate::ai::ProviderEvent::Done(Box::new(
+                crate::ai::AssistantMessage {
                     model: request.model,
                     content: String::new(),
                 },
@@ -568,7 +568,7 @@ mod tests {
         let mut runtime = AppRuntime::open_existing_session_with_provider_registry(
             options,
             &session_path,
-            exgent_ai::ProviderRegistry::builtin().with_dev_providers(),
+            crate::ai::ProviderRegistry::builtin().with_dev_providers(),
         )
         .unwrap();
 
@@ -693,11 +693,9 @@ mod tests {
             config_path: Some(dir.display().to_string()),
             ..RuntimeOptions::default()
         };
-        let mut registry = exgent_ai::ProviderRegistry::builtin();
+        let mut registry = crate::ai::ProviderRegistry::builtin();
         registry
-            .register("loop-write", || {
-                exgent_ai::DynamicProvider::new("loop-write", LoopWriteProvider)
-            })
+            .register(crate::ai::DynamicProvider::new("loop-write", LoopWriteProvider))
             .unwrap();
         let model_service = ModelService::load_with_provider_registry(&options, registry).unwrap();
         let mut runtime =
@@ -769,7 +767,7 @@ mod tests {
     #[test]
     fn hooks_block_tool_calls() {
         use crate::agent::{AgentHooks, ToolExecutionResult};
-        use exgent_ai::ToolCall;
+        use crate::ai::ToolCall;
         use std::sync::Arc;
 
         let dir = test_dir("hooks_block_tool_calls");
@@ -811,7 +809,7 @@ mod tests {
                 config_path: Some(dir.display().to_string()),
                 ..RuntimeOptions::default()
             },
-            exgent_ai::ProviderRegistry::builtin().with_dev_providers(),
+            crate::ai::ProviderRegistry::builtin().with_dev_providers(),
         )
         .unwrap()
     }

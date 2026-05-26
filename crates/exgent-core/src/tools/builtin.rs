@@ -1,6 +1,6 @@
 use std::{io, path::Path};
 
-use exgent_ai::{ToolCall, ToolDefinition};
+use crate::ai::{ToolCall, ToolDefinition};
 
 use super::registry::{Tool, ToolRegistry};
 use crate::cancel::CancelToken;

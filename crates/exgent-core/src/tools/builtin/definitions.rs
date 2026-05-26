@@ -1,4 +1,4 @@
-use exgent_ai::{ToolDefinition, ToolExecutionMode};
+use crate::ai::{ToolDefinition, ToolExecutionMode};
 use serde_json::json;
 
 pub(super) fn builtin_definition(name: &str) -> ToolDefinition {

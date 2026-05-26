@@ -1,3 +1,12 @@
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, RecvTimeoutError},
+        Arc,
+    },
+    time::Duration,
+};
+
 use reqwest::Url;
 
 mod anthropic;
@@ -6,20 +15,71 @@ mod github_copilot;
 mod openai_codex;
 mod pkce;
 
-pub use anthropic::{finish_anthropic_oauth_flow, start_anthropic_oauth_flow, AnthropicOAuthFlow};
+pub use anthropic::{finish_anthropic_oauth_flow, start_anthropic_oauth_flow};
 pub use github_copilot::{
     finish_github_copilot_device_flow, finish_github_copilot_device_flow_cancellable,
     normalize_github_domain, refresh_github_copilot_token, start_github_copilot_device_flow,
     GithubDeviceFlow,
 };
-pub use openai_codex::{
-    finish_openai_codex_oauth_flow, start_openai_codex_oauth_flow, OpenAiCodexOAuthFlow,
-};
+pub use openai_codex::{finish_openai_codex_oauth_flow, start_openai_codex_oauth_flow};
+
+pub type AnthropicOAuthFlow = PkceOAuthFlow;
+pub type OpenAiCodexOAuthFlow = PkceOAuthFlow;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorizationCode {
-    code: String,
-    state: String,
+    pub(crate) code: String,
+    pub(crate) state: String,
+}
+
+pub struct PkceOAuthFlow {
+    pub url: String,
+    pub(crate) verifier: String,
+    pub(crate) state: String,
+    pub(crate) redirect_uri: String,
+    callback: Receiver<Result<AuthorizationCode, String>>,
+    cancel_callback: Arc<AtomicBool>,
+}
+
+impl PkceOAuthFlow {
+    pub(crate) fn new(
+        url: String,
+        verifier: String,
+        state: String,
+        redirect_uri: String,
+        callback: Receiver<Result<AuthorizationCode, String>>,
+        cancel_callback: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            url,
+            verifier,
+            state,
+            redirect_uri,
+            callback,
+            cancel_callback,
+        }
+    }
+
+    pub fn wait_for_callback(&self, timeout: Duration) -> Result<AuthorizationCode, String> {
+        self.poll_callback(timeout)?
+            .ok_or_else(|| "timed out waiting for OAuth callback".to_string())
+    }
+
+    pub fn poll_callback(&self, timeout: Duration) -> Result<Option<AuthorizationCode>, String> {
+        match self.callback.recv_timeout(timeout) {
+            Ok(result) => result.map(Some),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("OAuth callback server stopped unexpectedly".to_string())
+            }
+        }
+    }
+}
+
+impl Drop for PkceOAuthFlow {
+    fn drop(&mut self) {
+        self.cancel_callback.store(true, Ordering::Relaxed);
+    }
 }
 
 pub fn parse_authorization_input(input: &str) -> Result<Option<AuthorizationCode>, String> {

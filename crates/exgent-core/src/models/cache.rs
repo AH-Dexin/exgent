@@ -5,7 +5,7 @@ use std::{
 };
 
 use chrono::{SecondsFormat, Utc};
-use exgent_ai::{DiscoveredModel, Model};
+use crate::ai::{DiscoveredModel, Model};
 use serde::{Deserialize, Serialize};
 
 use crate::{config::config_file, persistence::write_json_pretty};

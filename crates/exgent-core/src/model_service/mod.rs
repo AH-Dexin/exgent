@@ -1,7 +1,7 @@
 mod catalog;
 mod persistence;
 
-use exgent_ai::{
+use crate::ai::{
     discover_available_models, supports_model_discovery, DynamicProvider, Model, ProviderRegistry,
 };
 

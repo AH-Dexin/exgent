@@ -1,14 +1,5 @@
-use std::{
-    collections::BTreeMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError},
-        Arc,
-    },
-    time::Duration,
-};
+use std::collections::BTreeMap;
 
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::OAuthCredential;
@@ -17,7 +8,7 @@ use super::{
     callback::{oauth_callback_host, start_callback_server},
     current_time_millis,
     pkce::{create_pkce_challenge, create_pkce_verifier},
-    AuthorizationCode,
+    AuthorizationCode, PkceOAuthFlow,
 };
 
 const ANTHROPIC_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -28,39 +19,6 @@ const ANTHROPIC_CALLBACK_PATH: &str = "/callback";
 const ANTHROPIC_REDIRECT_URI: &str = "http://localhost:53692/callback";
 const ANTHROPIC_SCOPES: &str =
     "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
-
-#[derive(Debug)]
-pub struct AnthropicOAuthFlow {
-    pub url: String,
-    verifier: String,
-    state: String,
-    redirect_uri: String,
-    callback: Receiver<Result<AuthorizationCode, String>>,
-    cancel_callback: Arc<AtomicBool>,
-}
-
-impl AnthropicOAuthFlow {
-    pub fn wait_for_callback(&self, timeout: Duration) -> Result<AuthorizationCode, String> {
-        self.poll_callback(timeout)?
-            .ok_or_else(|| "timed out waiting for OAuth callback".to_string())
-    }
-
-    pub fn poll_callback(&self, timeout: Duration) -> Result<Option<AuthorizationCode>, String> {
-        match self.callback.recv_timeout(timeout) {
-            Ok(result) => result.map(Some),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err("OAuth callback server stopped unexpectedly".to_string())
-            }
-        }
-    }
-}
-
-impl Drop for AnthropicOAuthFlow {
-    fn drop(&mut self) {
-        self.cancel_callback.store(true, Ordering::Relaxed);
-    }
-}
 
 #[derive(Debug, Deserialize)]
 struct AnthropicTokenResponse {
@@ -79,7 +37,7 @@ struct AnthropicTokenRequest<'a> {
     code_verifier: &'a str,
 }
 
-pub fn start_anthropic_oauth_flow() -> Result<AnthropicOAuthFlow, String> {
+pub fn start_anthropic_oauth_flow() -> Result<PkceOAuthFlow, String> {
     let verifier = create_pkce_verifier();
     let challenge = create_pkce_challenge(&verifier);
     let callback_host = oauth_callback_host();
@@ -91,6 +49,7 @@ pub fn start_anthropic_oauth_flow() -> Result<AnthropicOAuthFlow, String> {
         "Anthropic",
     )?;
 
+    use reqwest::Url;
     let mut url = Url::parse(ANTHROPIC_AUTHORIZE_URL)
         .map_err(|error| format!("invalid Anthropic authorize URL: {error}"))?;
     url.query_pairs_mut()
@@ -103,18 +62,18 @@ pub fn start_anthropic_oauth_flow() -> Result<AnthropicOAuthFlow, String> {
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", &verifier);
 
-    Ok(AnthropicOAuthFlow {
-        url: url.to_string(),
-        verifier: verifier.clone(),
-        state: verifier,
-        redirect_uri: ANTHROPIC_REDIRECT_URI.to_string(),
-        callback: callback.receiver,
-        cancel_callback: callback.cancel,
-    })
+    Ok(PkceOAuthFlow::new(
+        url.to_string(),
+        verifier.clone(),
+        verifier,
+        ANTHROPIC_REDIRECT_URI.to_string(),
+        callback.receiver,
+        callback.cancel,
+    ))
 }
 
 pub fn finish_anthropic_oauth_flow(
-    flow: &AnthropicOAuthFlow,
+    flow: &PkceOAuthFlow,
     authorization: AuthorizationCode,
 ) -> Result<OAuthCredential, String> {
     if !authorization.state.is_empty() && authorization.state != flow.state {
@@ -139,7 +98,7 @@ fn exchange_anthropic_authorization_code(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<OAuthCredential, String> {
-    let client = exgent_ai::shared_blocking_client();
+    let client = crate::ai::shared_blocking_client();
     let response = client
         .post(ANTHROPIC_TOKEN_URL)
         .header(reqwest::header::ACCEPT, "application/json")

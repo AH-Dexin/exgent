@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, Local};
-use exgent_ai::ToolDefinition;
+use crate::ai::ToolDefinition;
 
 pub fn build_system_prompt_for_cwd(
     tools: &[ToolDefinition],

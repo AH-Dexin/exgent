@@ -9,10 +9,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::config_dir;
-use exgent_ai::{ChatMessage, ImageContent, TokenUsage, ToolCall};
+use crate::ai::{ChatMessage, ImageContent, TokenUsage, ToolCall};
 
 #[cfg(test)]
-use exgent_ai::MessageRole as ChatMessageRole;
+use crate::ai::MessageRole as ChatMessageRole;
 
 const CURRENT_SESSION_VERSION: u32 = 2;
 

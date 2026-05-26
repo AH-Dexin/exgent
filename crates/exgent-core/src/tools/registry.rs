@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use exgent_ai::{ToolCall, ToolDefinition};
+use crate::ai::{ToolCall, ToolDefinition};
 
 use crate::{
     agent::{ToolExecutionResult, ToolExecutor},

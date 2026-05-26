@@ -3,7 +3,7 @@ use std::{
     thread,
 };
 
-use exgent_ai::{
+use crate::ai::{
     ChatMessage, Model, ProviderAdapter, ProviderEvent, ProviderRequest, ToolCall,
     ToolExecutionMode,
 };

@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use exgent_ai::ToolCall;
+use crate::ai::ToolCall;
 
 use super::{arguments::*, ToolOutput};
 use crate::cancel::CancelToken;

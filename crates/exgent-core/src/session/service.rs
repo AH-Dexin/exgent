@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use exgent_ai::{ChatMessage, ImageContent, MessageRole as ChatMessageRole, TokenUsage, ToolCall};
+use crate::ai::{ChatMessage, ImageContent, MessageRole as ChatMessageRole, TokenUsage, ToolCall};
 
 use crate::config::RuntimeOptions;
 

@@ -1,4 +1,4 @@
-use exgent_ai::{ChatMessage, Model, ProviderAdapter};
+use crate::ai::{ChatMessage, Model, ProviderAdapter};
 
 use crate::{cancel::CancelToken, config::AgentLoopConfig};
 
@@ -111,7 +111,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use exgent_ai::{
+    use crate::ai::{
         fake_model, AssistantMessage, FakeProvider, MessageRole, ProviderEvent, ProviderRequest,
         ToolCall, ToolDefinition, ToolExecutionMode,
     };

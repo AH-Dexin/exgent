@@ -2,6 +2,7 @@ mod agent_loop;
 mod events;
 mod runner;
 mod session;
+mod system_prompt;
 mod tool_contract;
 
 pub use events::AgentEvent;

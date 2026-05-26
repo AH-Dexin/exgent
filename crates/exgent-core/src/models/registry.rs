@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf};
 
-use exgent_ai::{built_in_models, DiscoveredModel, Model};
+use crate::ai::{built_in_models, DiscoveredModel, Model};
 
 use crate::{config::config_file, persistence::write_json_pretty, settings::ModelSelection};
 
