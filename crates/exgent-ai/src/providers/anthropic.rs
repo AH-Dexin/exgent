@@ -17,7 +17,16 @@ pub struct AnthropicMessagesProvider;
 
 impl ProviderAdapter for AnthropicMessagesProvider {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
-        if let Err(error) = anthropic_messages_stream(request, emit) {
+        self.stream_events_cancellable(request, &|| false, emit);
+    }
+
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        if let Err(error) = anthropic_messages_stream(request, should_cancel, emit) {
             emit(ProviderEvent::Error(error.to_string()));
         }
     }
@@ -44,8 +53,13 @@ struct AnthropicTool {
 
 fn anthropic_messages_stream(
     request: ProviderRequest,
+    should_cancel: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(ProviderEvent),
 ) -> Result<(), ProviderError> {
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
+
     let base_url = request
         .model
         .base_url
@@ -64,7 +78,7 @@ fn anthropic_messages_stream(
         tools: anthropic_tools(&request.tools),
     };
 
-    let mut request_builder = reqwest::blocking::Client::new()
+    let mut request_builder = crate::shared_blocking_client()
         .post(url)
         .header(reqwest::header::ACCEPT, "text/event-stream")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -86,6 +100,9 @@ fn anthropic_messages_stream(
     }
     request_builder = apply_model_headers(request_builder, &request.model, &request.messages);
 
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
     let response = request_builder
         .send()
         .map_err(|error| ProviderError::new(format!("request failed: {error}")))?;
@@ -104,10 +121,15 @@ fn anthropic_messages_stream(
     let mut content = String::new();
     let mut usage = TokenUsage::default();
     let mut tool_calls = ToolCallAccumulator::default();
-    let reader = BufReader::new(response);
+    let mut lines = BufReader::new(response).lines();
     emit(ProviderEvent::Start);
 
-    for line in reader.lines() {
+    while let Some(line) = {
+        if should_cancel() {
+            return Err(ProviderError::new("cancelled"));
+        }
+        lines.next()
+    } {
         let line =
             line.map_err(|error| ProviderError::new(format!("stream read failed: {error}")))?;
         if let Some(delta) = parse_anthropic_tool_stream_line(&line)? {
@@ -116,6 +138,9 @@ fn anthropic_messages_stream(
             }
         }
         for delta in parse_anthropic_stream_line(&line)? {
+            if should_cancel() {
+                return Err(ProviderError::new("cancelled"));
+            }
             match delta {
                 StreamDelta::Text(delta) => {
                     content.push_str(&delta);

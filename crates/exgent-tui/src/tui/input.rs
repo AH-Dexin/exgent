@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use exgent_core::AppRuntimeHost;
 
 use super::auth_input::{
@@ -17,10 +17,15 @@ use super::settings_input::{
 use super::state::*;
 
 type TuiRuntime = AppRuntimeHost;
+const TRANSCRIPT_SCROLL_LINES: usize = 3;
 
 pub(super) fn handle_key(app: &mut TuiApp, runtime: &mut TuiRuntime, key: KeyEvent) -> UiAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return UiAction::Quit;
+    }
+
+    if transcript_scroll_enabled(app) && handle_transcript_scroll_key(app, key) {
+        return UiAction::None;
     }
 
     match app.overlay.clone() {
@@ -59,5 +64,43 @@ pub(super) fn handle_key(app: &mut TuiApp, runtime: &mut TuiRuntime, key: KeyEve
         Overlay::AuthProgress(_) => UiAction::None,
         Overlay::SlashMenu { selected } => handle_composer_key(app, runtime, key, Some(selected)),
         Overlay::None => handle_composer_key(app, runtime, key, None),
+    }
+}
+
+pub(super) fn handle_mouse(app: &mut TuiApp, mouse: MouseEvent) {
+    if !transcript_scroll_enabled(app) {
+        return;
+    }
+
+    match mouse.kind {
+        MouseEventKind::ScrollUp => app.scroll_transcript_up(TRANSCRIPT_SCROLL_LINES),
+        MouseEventKind::ScrollDown => app.scroll_transcript_down(TRANSCRIPT_SCROLL_LINES),
+        _ => {}
+    }
+}
+
+fn transcript_scroll_enabled(app: &TuiApp) -> bool {
+    matches!(app.overlay, Overlay::None | Overlay::SlashMenu { .. })
+}
+
+fn handle_transcript_scroll_key(app: &mut TuiApp, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::PageUp => {
+            app.scroll_transcript_up(10);
+            true
+        }
+        KeyCode::PageDown => {
+            app.scroll_transcript_down(10);
+            true
+        }
+        KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.scroll_transcript_to_top();
+            true
+        }
+        KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.scroll_transcript_to_bottom();
+            true
+        }
+        _ => false,
     }
 }

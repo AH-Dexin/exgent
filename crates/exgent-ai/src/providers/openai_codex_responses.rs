@@ -25,7 +25,16 @@ pub struct OpenAiCodexResponsesProvider;
 
 impl ProviderAdapter for OpenAiCodexResponsesProvider {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
-        if let Err(error) = openai_codex_responses_stream(request, emit) {
+        self.stream_events_cancellable(request, &|| false, emit);
+    }
+
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        if let Err(error) = openai_codex_responses_stream(request, should_cancel, emit) {
             emit(ProviderEvent::Error(error.to_string()));
         }
     }
@@ -47,8 +56,13 @@ struct OpenAiCodexResponsesRequest {
 
 fn openai_codex_responses_stream(
     request: ProviderRequest,
+    should_cancel: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(ProviderEvent),
 ) -> Result<(), ProviderError> {
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
+
     let api_key = resolve_api_key(&request.model)?;
     let account_id = extract_chatgpt_account_id(&api_key)?;
     let url = resolve_codex_url(request.model.base_url.as_deref());
@@ -65,7 +79,7 @@ fn openai_codex_responses_stream(
         parallel_tool_calls,
     };
 
-    let request_builder = reqwest::blocking::Client::new()
+    let request_builder = crate::shared_blocking_client()
         .post(url)
         .bearer_auth(api_key)
         .header("chatgpt-account-id", account_id)
@@ -76,6 +90,9 @@ fn openai_codex_responses_stream(
         .header(reqwest::header::CONTENT_TYPE, "application/json");
     let request_builder = apply_model_headers(request_builder, &request.model, &request.messages);
 
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
     let response = request_builder
         .json(&body)
         .send()
@@ -94,13 +111,21 @@ fn openai_codex_responses_stream(
     let model = request.model;
     let mut content = String::new();
     let mut usage = TokenUsage::default();
-    let reader = BufReader::new(response);
+    let mut lines = BufReader::new(response).lines();
     emit(ProviderEvent::Start);
 
-    for line in reader.lines() {
+    while let Some(line) = {
+        if should_cancel() {
+            return Err(ProviderError::new("cancelled"));
+        }
+        lines.next()
+    } {
         let line =
             line.map_err(|error| ProviderError::new(format!("stream read failed: {error}")))?;
         for delta in parse_openai_codex_stream_line(&line)? {
+            if should_cancel() {
+                return Err(ProviderError::new("cancelled"));
+            }
             match delta {
                 StreamDelta::Text(delta) => {
                     content.push_str(&delta);

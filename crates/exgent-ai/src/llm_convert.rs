@@ -5,13 +5,15 @@ use std::{
 
 use serde::Serialize;
 
-use crate::{ChatMessage, MessageRole, ToolArguments, ToolCall};
+use crate::{ChatMessage, MessageRole, Model, ToolArguments, ToolCall};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct OpenAiChatMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<OpenAiChatToolCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,7 +40,10 @@ pub(crate) struct AnthropicMessage {
     content: Vec<serde_json::Value>,
 }
 
-pub(crate) fn openai_chat_messages(messages: &[ChatMessage]) -> Vec<OpenAiChatMessage> {
+pub(crate) fn openai_chat_messages(
+    messages: &[ChatMessage],
+    model: &Model,
+) -> Vec<OpenAiChatMessage> {
     let mut pending_tool_call_ids = Vec::new();
     messages
         .iter()
@@ -47,7 +52,8 @@ pub(crate) fn openai_chat_messages(messages: &[ChatMessage]) -> Vec<OpenAiChatMe
                 pending_tool_call_ids.extend(message.tool_calls.iter().map(|call| call.id.clone()));
                 return vec![OpenAiChatMessage {
                     role: "assistant".to_string(),
-                    content: non_empty_content(&message.content),
+                    content: non_empty_content_value(&message.content),
+                    reasoning_content: openai_chat_reasoning_content(message, model),
                     tool_calls: message
                         .tool_calls
                         .iter()
@@ -66,7 +72,8 @@ pub(crate) fn openai_chat_messages(messages: &[ChatMessage]) -> Vec<OpenAiChatMe
                         pending_tool_call_ids.retain(|id| id != &result.tool_call_id);
                         return vec![OpenAiChatMessage {
                             role: "tool".to_string(),
-                            content: Some(result.content),
+                            content: Some(serde_json::Value::String(result.content)),
+                            reasoning_content: None,
                             tool_calls: Vec::new(),
                             tool_call_id: Some(result.tool_call_id),
                         }];
@@ -75,7 +82,8 @@ pub(crate) fn openai_chat_messages(messages: &[ChatMessage]) -> Vec<OpenAiChatMe
 
                 return vec![OpenAiChatMessage {
                     role: "user".to_string(),
-                    content: Some(llm_message_content(message)),
+                    content: Some(serde_json::Value::String(llm_message_content(message))),
+                    reasoning_content: None,
                     tool_calls: Vec::new(),
                     tool_call_id: None,
                 }];
@@ -83,7 +91,8 @@ pub(crate) fn openai_chat_messages(messages: &[ChatMessage]) -> Vec<OpenAiChatMe
 
             vec![OpenAiChatMessage {
                 role: openai_role(&message.role).to_string(),
-                content: Some(message.content.clone()),
+                content: Some(openai_chat_content(message)),
+                reasoning_content: openai_chat_reasoning_content(message, model),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
             }]
@@ -122,7 +131,7 @@ pub(crate) fn openai_responses_input(messages: &[ChatMessage]) -> Vec<serde_json
 
             vec![serde_json::json!({
                 "role": openai_responses_role(&message.role),
-                "content": llm_message_content(message),
+                "content": openai_responses_content(message),
             })]
         })
         .collect()
@@ -169,7 +178,7 @@ fn anthropic_message(message: &ChatMessage) -> Option<AnthropicMessage> {
         MessageRole::System => None,
         MessageRole::User => Some(AnthropicMessage {
             role: "user".to_string(),
-            content: vec![text_block(&message.content)],
+            content: anthropic_text_and_image_blocks(message),
         }),
         MessageRole::Assistant => {
             let mut content = Vec::new();
@@ -225,6 +234,101 @@ fn text_block(text: &str) -> serde_json::Value {
     })
 }
 
+fn image_data_url(image: &crate::ImageContent) -> String {
+    format!("data:{};base64,{}", image.mime_type, image.data)
+}
+
+fn openai_chat_content(message: &ChatMessage) -> serde_json::Value {
+    if message.images.is_empty() {
+        return serde_json::Value::String(message.content.clone());
+    }
+
+    let mut content = Vec::new();
+    if !message.content.is_empty() {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": &message.content,
+        }));
+    }
+    content.extend(message.images.iter().map(|image| {
+        serde_json::json!({
+            "type": "image_url",
+            "image_url": {
+                "url": image_data_url(image),
+            },
+        })
+    }));
+    serde_json::Value::Array(content)
+}
+
+fn openai_chat_reasoning_content(message: &ChatMessage, model: &Model) -> Option<String> {
+    if message.role != MessageRole::Assistant {
+        return None;
+    }
+
+    match message.reasoning.as_deref() {
+        Some(reasoning) if !reasoning.is_empty() => Some(reasoning.to_string()),
+        _ if requires_reasoning_content_on_assistant_messages(model) => Some(String::new()),
+        _ => None,
+    }
+}
+
+fn requires_reasoning_content_on_assistant_messages(model: &Model) -> bool {
+    model.reasoning.unwrap_or(false)
+        && model
+            .compat
+            .as_ref()
+            .and_then(|compat| compat.get("requiresReasoningContentOnAssistantMessages"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn openai_responses_content(message: &ChatMessage) -> serde_json::Value {
+    if message.images.is_empty() {
+        return serde_json::Value::String(llm_message_content(message));
+    }
+
+    let mut content = Vec::new();
+    if !message.content.is_empty() {
+        content.push(serde_json::json!({
+            "type": "input_text",
+            "text": &message.content,
+        }));
+    }
+    content.extend(message.images.iter().map(|image| {
+        serde_json::json!({
+            "type": "input_image",
+            "detail": "auto",
+            "image_url": image_data_url(image),
+        })
+    }));
+    serde_json::Value::Array(content)
+}
+
+fn anthropic_text_and_image_blocks(message: &ChatMessage) -> Vec<serde_json::Value> {
+    if message.images.is_empty() {
+        return vec![text_block(&message.content)];
+    }
+
+    let mut content = Vec::new();
+    if message.content.is_empty() {
+        content.push(text_block("(see attached image)"));
+    } else {
+        content.push(text_block(&message.content));
+    }
+    content.extend(message.images.iter().map(|image| {
+        serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": &image.mime_type,
+                "data": &image.data,
+            },
+        })
+    }));
+    content
+}
+
 fn llm_message_content(message: &ChatMessage) -> String {
     match message.role {
         MessageRole::Tool => format!("Tool result:\n{}", message.content),
@@ -269,8 +373,8 @@ fn legacy_tool_result_view(content: &str) -> Option<ToolResultView> {
     })
 }
 
-fn non_empty_content(content: &str) -> Option<String> {
-    (!content.is_empty()).then(|| content.to_string())
+fn non_empty_content_value(content: &str) -> Option<serde_json::Value> {
+    (!content.is_empty()).then(|| serde_json::Value::String(content.to_string()))
 }
 
 fn tool_arguments_json(arguments: &ToolArguments) -> serde_json::Value {
@@ -354,6 +458,19 @@ fn normalize_anthropic_tool_call_id(id: &str) -> String {
 mod tests {
     use super::*;
 
+    fn openai_chat_model() -> Model {
+        Model::new("openai", "test-model", "openai-completions")
+    }
+
+    fn openai_chat_reasoning_model() -> Model {
+        let mut model = openai_chat_model();
+        model.reasoning = Some(true);
+        model.compat = Some(serde_json::json!({
+            "requiresReasoningContentOnAssistantMessages": true
+        }));
+        model
+    }
+
     #[test]
     fn converts_tool_history_for_openai_chat() {
         let messages = vec![
@@ -364,7 +481,8 @@ mod tests {
             ChatMessage::tool_result("call_1", "read", "workspace manifest", false),
         ];
 
-        let value = serde_json::to_value(openai_chat_messages(&messages)).unwrap();
+        let model = openai_chat_model();
+        let value = serde_json::to_value(openai_chat_messages(&messages, &model)).unwrap();
 
         assert_eq!(
             value,
@@ -385,6 +503,33 @@ mod tests {
                     "role":"tool",
                     "content":"workspace manifest",
                     "tool_call_id":"call_1"
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn converts_reasoning_content_for_openai_chat() {
+        let messages = vec![
+            ChatMessage::assistant_with_reasoning("answer", "thinking"),
+            ChatMessage::assistant("plain"),
+        ];
+
+        let model = openai_chat_reasoning_model();
+        let value = serde_json::to_value(openai_chat_messages(&messages, &model)).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!([
+                {
+                    "role": "assistant",
+                    "content": "answer",
+                    "reasoning_content": "thinking"
+                },
+                {
+                    "role": "assistant",
+                    "content": "plain",
+                    "reasoning_content": ""
                 }
             ])
         );
@@ -449,6 +594,57 @@ mod tests {
                     }]
                 }
             ])
+        );
+    }
+
+    #[test]
+    fn converts_user_images_for_provider_payloads() {
+        let messages = vec![ChatMessage::user_with_images(
+            "describe",
+            vec![crate::ImageContent::new("AAAA", "image/png")],
+        )];
+
+        let model = openai_chat_model();
+        let chat_value = serde_json::to_value(openai_chat_messages(&messages, &model)).unwrap();
+        assert_eq!(
+            chat_value,
+            serde_json::json!([{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+                ]
+            }])
+        );
+
+        assert_eq!(
+            openai_responses_input(&messages),
+            vec![serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe"},
+                    {"type": "input_image", "detail": "auto", "image_url": "data:image/png;base64,AAAA"}
+                ]
+            })]
+        );
+
+        let anthropic_value = serde_json::to_value(anthropic_messages(&messages)).unwrap();
+        assert_eq!(
+            anthropic_value,
+            serde_json::json!([{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "AAAA"
+                        }
+                    }
+                ]
+            }])
         );
     }
 

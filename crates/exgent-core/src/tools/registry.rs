@@ -6,7 +6,10 @@ use std::{
 
 use exgent_ai::{ToolCall, ToolDefinition};
 
-use crate::agent::{ToolExecutionResult, ToolExecutor};
+use crate::{
+    agent::{ToolExecutionResult, ToolExecutor},
+    cancel::CancelToken,
+};
 
 use super::builtin::{register_builtin_tools, ToolOutput};
 
@@ -14,6 +17,7 @@ use super::builtin::{register_builtin_tools, ToolOutput};
 pub struct ToolRegistry {
     tools: Vec<Arc<dyn Tool>>,
     pub(super) project_dir: Arc<PathBuf>,
+    cancel: CancelToken,
 }
 
 impl ToolRegistry {
@@ -36,10 +40,16 @@ impl ToolRegistry {
         Self {
             tools: Vec::new(),
             project_dir: Arc::new(project_dir.into()),
+            cancel: CancelToken::new(),
         }
     }
 
-    pub(super) fn register(&mut self, tool: impl Tool + 'static) -> io::Result<()> {
+    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    pub fn register(&mut self, tool: impl Tool + 'static) -> io::Result<()> {
         let name = tool.name().to_string();
         if self.tools.iter().any(|existing| existing.name() == name) {
             return Err(io::Error::new(
@@ -67,7 +77,7 @@ impl ToolRegistry {
             ));
         };
 
-        tool.execute_call(call, &self.project_dir)
+        tool.execute_call(call, &self.project_dir, &self.cancel)
     }
 }
 
@@ -86,10 +96,15 @@ impl std::fmt::Debug for ToolRegistry {
     }
 }
 
-pub(super) trait Tool: Send + Sync {
+pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn definition(&self) -> ToolDefinition;
-    fn execute_call(&self, call: &ToolCall, project_dir: &Path) -> io::Result<ToolOutput>;
+    fn execute_call(
+        &self,
+        call: &ToolCall,
+        project_dir: &Path,
+        cancel: &CancelToken,
+    ) -> io::Result<ToolOutput>;
 }
 
 impl ToolExecutor for ToolRegistry {

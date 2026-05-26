@@ -1,4 +1,5 @@
 mod builtin;
 mod registry;
 
-pub(crate) use registry::ToolRegistry;
+pub use builtin::ToolOutput;
+pub use registry::{Tool, ToolRegistry};

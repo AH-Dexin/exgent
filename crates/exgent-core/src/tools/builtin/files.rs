@@ -6,6 +6,7 @@ use std::{
 use exgent_ai::ToolCall;
 
 use super::{arguments::*, ToolOutput};
+use crate::cancel::CancelToken;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ReadArgs {
@@ -28,7 +29,11 @@ pub(super) struct EditArgs {
     pub replace_all: bool,
 }
 
-pub(super) fn execute_read_call(call: &ToolCall, project_dir: &Path) -> io::Result<ToolOutput> {
+pub(super) fn execute_read_call(
+    call: &ToolCall,
+    project_dir: &Path,
+    _cancel: &CancelToken,
+) -> io::Result<ToolOutput> {
     read(
         ReadArgs {
             path: required_argument(call, "path")?.to_string(),
@@ -39,7 +44,11 @@ pub(super) fn execute_read_call(call: &ToolCall, project_dir: &Path) -> io::Resu
     )
 }
 
-pub(super) fn execute_write_call(call: &ToolCall, project_dir: &Path) -> io::Result<ToolOutput> {
+pub(super) fn execute_write_call(
+    call: &ToolCall,
+    project_dir: &Path,
+    _cancel: &CancelToken,
+) -> io::Result<ToolOutput> {
     write(
         WriteArgs {
             path: required_argument(call, "path")?.to_string(),
@@ -49,7 +58,11 @@ pub(super) fn execute_write_call(call: &ToolCall, project_dir: &Path) -> io::Res
     )
 }
 
-pub(super) fn execute_edit_call(call: &ToolCall, project_dir: &Path) -> io::Result<ToolOutput> {
+pub(super) fn execute_edit_call(
+    call: &ToolCall,
+    project_dir: &Path,
+    _cancel: &CancelToken,
+) -> io::Result<ToolOutput> {
     edit(
         EditArgs {
             path: required_argument(call, "path")?.to_string(),
@@ -314,6 +327,7 @@ mod tests {
                 .with_argument("path", path.display().to_string())
                 .with_argument("offset", 1),
             &dir,
+            &CancelToken::new(),
         )
         .unwrap();
 

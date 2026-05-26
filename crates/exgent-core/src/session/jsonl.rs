@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::config_dir;
-use exgent_ai::{ChatMessage, TokenUsage, ToolCall};
+use exgent_ai::{ChatMessage, ImageContent, TokenUsage, ToolCall};
 
 #[cfg(test)]
 use exgent_ai::MessageRole as ChatMessageRole;
@@ -38,6 +38,10 @@ pub struct MessageEntry {
     role: MessageRole,
     content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    images: Vec<ImageContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<TokenUsage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<ToolCall>,
@@ -63,10 +67,20 @@ impl MessageEntry {
         message.tool_call_id = self.tool_call_id.clone();
         message.tool_name = self.tool_name.clone();
         message.tool_is_error = self.tool_is_error;
+        message.images = self.images.clone();
+        message.reasoning = self.reasoning.clone();
         message
     }
 
     fn preview_content(&self) -> String {
+        if !self.images.is_empty() {
+            let image_note = format_image_count(self.images.len());
+            if self.content.is_empty() {
+                return image_note;
+            }
+            return format!("{} {}", self.content, image_note);
+        }
+
         if !self.content.is_empty() || self.tool_calls.is_empty() {
             return self.content.clone();
         }
@@ -270,7 +284,7 @@ impl Session {
                 preview: session
                     .entries
                     .last()
-                    .map(|entry| truncate_single_line(&entry.content, 80)),
+                    .map(|entry| truncate_single_line(&entry.preview_content(), 80)),
                 modified_ms,
             });
         }
@@ -288,8 +302,24 @@ impl Session {
         self.append_message(MessageRole::User, content.into(), None)
     }
 
+    pub fn append_user_with_images(
+        &mut self,
+        content: impl Into<String>,
+        images: Vec<ImageContent>,
+    ) -> io::Result<()> {
+        self.append_message_with_images(MessageRole::User, content.into(), images, None)
+    }
+
     pub fn append_assistant(&mut self, content: impl Into<String>) -> io::Result<()> {
-        self.append_message(MessageRole::Assistant, content.into(), None)
+        self.append_assistant_with_reasoning(content, None)
+    }
+
+    pub fn append_assistant_with_reasoning(
+        &mut self,
+        content: impl Into<String>,
+        reasoning: Option<String>,
+    ) -> io::Result<()> {
+        self.append_message_with_reasoning(MessageRole::Assistant, content.into(), reasoning, None)
     }
 
     pub fn append_assistant_tool_calls(
@@ -298,9 +328,20 @@ impl Session {
         calls: Vec<ToolCall>,
         usage: Option<TokenUsage>,
     ) -> io::Result<()> {
+        self.append_assistant_tool_calls_with_reasoning(content, None, calls, usage)
+    }
+
+    pub fn append_assistant_tool_calls_with_reasoning(
+        &mut self,
+        content: impl Into<String>,
+        reasoning: Option<String>,
+        calls: Vec<ToolCall>,
+        usage: Option<TokenUsage>,
+    ) -> io::Result<()> {
         self.append_message_with_tool_metadata(
             MessageRole::Assistant,
             content.into(),
+            reasoning,
             usage,
             MessageToolMetadata {
                 tool_calls: calls,
@@ -325,6 +366,7 @@ impl Session {
             MessageRole::Tool,
             content.into(),
             None,
+            None,
             MessageToolMetadata {
                 tool_call_id: Some(tool_call_id.into()),
                 tool_name: Some(tool_name.into()),
@@ -339,7 +381,21 @@ impl Session {
         content: impl Into<String>,
         usage: TokenUsage,
     ) -> io::Result<()> {
-        self.append_message(MessageRole::Assistant, content.into(), Some(usage))
+        self.append_assistant_with_reasoning_and_usage(content, None, usage)
+    }
+
+    pub fn append_assistant_with_reasoning_and_usage(
+        &mut self,
+        content: impl Into<String>,
+        reasoning: Option<String>,
+        usage: TokenUsage,
+    ) -> io::Result<()> {
+        self.append_message_with_reasoning(
+            MessageRole::Assistant,
+            content.into(),
+            reasoning,
+            Some(usage),
+        )
     }
 
     pub fn append_error(&mut self, content: impl Into<String>) -> io::Result<()> {
@@ -434,13 +490,71 @@ impl Session {
         content: String,
         usage: Option<TokenUsage>,
     ) -> io::Result<()> {
-        self.append_message_with_tool_metadata(role, content, usage, MessageToolMetadata::default())
+        self.append_message_with_reasoning(role, content, None, usage)
+    }
+
+    fn append_message_with_reasoning(
+        &mut self,
+        role: MessageRole,
+        content: String,
+        reasoning: Option<String>,
+        usage: Option<TokenUsage>,
+    ) -> io::Result<()> {
+        self.append_message_with_images_and_reasoning(role, content, reasoning, Vec::new(), usage)
+    }
+
+    fn append_message_with_images(
+        &mut self,
+        role: MessageRole,
+        content: String,
+        images: Vec<ImageContent>,
+        usage: Option<TokenUsage>,
+    ) -> io::Result<()> {
+        self.append_message_with_images_and_reasoning(role, content, None, images, usage)
+    }
+
+    fn append_message_with_images_and_reasoning(
+        &mut self,
+        role: MessageRole,
+        content: String,
+        reasoning: Option<String>,
+        images: Vec<ImageContent>,
+        usage: Option<TokenUsage>,
+    ) -> io::Result<()> {
+        self.append_message_with_images_and_tool_metadata(
+            role,
+            content,
+            reasoning,
+            images,
+            usage,
+            MessageToolMetadata::default(),
+        )
     }
 
     fn append_message_with_tool_metadata(
         &mut self,
         role: MessageRole,
         content: String,
+        reasoning: Option<String>,
+        usage: Option<TokenUsage>,
+        tool_metadata: MessageToolMetadata,
+    ) -> io::Result<()> {
+        self.append_message_with_images_and_tool_metadata(
+            role,
+            content,
+            reasoning,
+            Vec::new(),
+            usage,
+            tool_metadata,
+        )
+    }
+
+    fn append_message_with_images_and_tool_metadata(
+        &mut self,
+        role: MessageRole,
+        content: String,
+        reasoning: Option<String>,
+        images: Vec<ImageContent>,
         usage: Option<TokenUsage>,
         tool_metadata: MessageToolMetadata,
     ) -> io::Result<()> {
@@ -451,6 +565,8 @@ impl Session {
             timestamp_ms: now_ms(),
             role,
             content,
+            reasoning,
+            images,
             usage,
             tool_calls: tool_metadata.tool_calls,
             tool_call_id: tool_metadata.tool_call_id,
@@ -534,6 +650,14 @@ fn truncate_single_line(content: &str, max_chars: usize) -> String {
     text = text.chars().take(max_chars.saturating_sub(3)).collect();
     text.push_str("...");
     text
+}
+
+fn format_image_count(count: usize) -> String {
+    if count == 1 {
+        "[1 image]".to_string()
+    } else {
+        format!("[{count} images]")
+    }
 }
 
 #[cfg(test)]
@@ -659,6 +783,53 @@ mod tests {
     }
 
     #[test]
+    fn persists_user_images() {
+        let dir = test_dir("persists_user_images");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut session = Session::create_in_dir(dir.join("sessions")).unwrap();
+        session
+            .append_user_with_images("look", vec![ImageContent::new("AAAA", "image/png")])
+            .unwrap();
+
+        let loaded = Session::open(session.path()).unwrap();
+        let messages = loaded.chat_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ChatMessageRole::User);
+        assert_eq!(messages[0].content, "look");
+        assert_eq!(
+            messages[0].images,
+            vec![ImageContent::new("AAAA", "image/png")]
+        );
+        assert_eq!(
+            loaded.recent_message_previews(1)[0].content,
+            "look [1 image]"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persists_assistant_reasoning_for_replay() {
+        let dir = test_dir("persists_assistant_reasoning_for_replay");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut session = Session::create_in_dir(dir.join("sessions")).unwrap();
+        session
+            .append_assistant_with_reasoning("answer", Some("thinking".to_string()))
+            .unwrap();
+
+        let loaded = Session::open(session.path()).unwrap();
+        let messages = loaded.chat_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ChatMessageRole::Assistant);
+        assert_eq!(messages[0].content, "answer");
+        assert_eq!(messages[0].reasoning.as_deref(), Some("thinking"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn error_records_replay_as_system_context() {
         let dir = test_dir("error_records_replay_as_system_context");
         let _ = fs::remove_dir_all(&dir);
@@ -703,8 +874,9 @@ mod tests {
 
         let mut session = Session::create_in_dir(dir.join("sessions")).unwrap();
         session
-            .append_assistant_tool_calls(
+            .append_assistant_tool_calls_with_reasoning(
                 "",
+                Some("checking tool args".to_string()),
                 vec![ToolCall::new("call_1", "read").with_argument("path", "Cargo.toml")],
                 None,
             )
@@ -717,6 +889,7 @@ mod tests {
         let messages = loaded.chat_messages();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, ChatMessageRole::Assistant);
+        assert_eq!(messages[0].reasoning.as_deref(), Some("checking tool args"));
         assert_eq!(messages[0].tool_calls.len(), 1);
         assert_eq!(messages[0].tool_calls[0].name, "read");
         assert_eq!(messages[1].role, ChatMessageRole::Tool);

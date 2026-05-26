@@ -58,6 +58,7 @@ pub(super) fn handle_api_key_provider_key(
             } else if let Some(provider) = state.providers.get(state.selected) {
                 app.overlay = Overlay::ApiKeyInput(ApiKeyInputState {
                     provider: provider.provider.clone(),
+                    base_url: provider.base_url.clone(),
                     value: String::new(),
                 });
             }

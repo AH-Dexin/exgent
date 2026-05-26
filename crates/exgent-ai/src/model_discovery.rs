@@ -43,7 +43,7 @@ fn discover_openai_models(
             .unwrap_or("https://api.openai.com/v1")
             .trim_end_matches('/')
     );
-    let response = reqwest::blocking::Client::new()
+    let response = crate::shared_blocking_client()
         .get(url)
         .bearer_auth(api_key)
         .send()
@@ -63,7 +63,7 @@ fn discover_anthropic_models(
             .unwrap_or("https://api.anthropic.com")
             .trim_end_matches('/')
     );
-    let response = reqwest::blocking::Client::new()
+    let response = crate::shared_blocking_client()
         .get(url)
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
@@ -84,7 +84,7 @@ fn discover_google_models(
             .unwrap_or("https://generativelanguage.googleapis.com/v1beta")
             .trim_end_matches('/')
     );
-    let response = reqwest::blocking::Client::new()
+    let response = crate::shared_blocking_client()
         .get(url)
         .header("x-goog-api-key", api_key)
         .send()

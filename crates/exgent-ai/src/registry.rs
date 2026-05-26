@@ -41,6 +41,16 @@ impl ProviderAdapter for DynamicProvider {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
         self.adapter.stream_events(request, emit);
     }
+
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        self.adapter
+            .stream_events_cancellable(request, should_cancel, emit);
+    }
 }
 
 #[derive(Clone)]

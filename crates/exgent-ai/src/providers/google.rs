@@ -15,7 +15,16 @@ pub struct GoogleGenerativeAiProvider;
 
 impl ProviderAdapter for GoogleGenerativeAiProvider {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
-        if let Err(error) = google_generate_content_stream(request, emit) {
+        self.stream_events_cancellable(request, &|| false, emit);
+    }
+
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        if let Err(error) = google_generate_content_stream(request, should_cancel, emit) {
             emit(ProviderEvent::Error(error.to_string()));
         }
     }
@@ -50,11 +59,20 @@ struct GooglePart {
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    inline_data: Option<GoogleInlineData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     function_call: Option<GoogleFunctionCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     function_response: Option<GoogleFunctionResponse>,
     #[serde(default, skip_serializing_if = "is_false")]
     thought: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct GoogleInlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -155,8 +173,13 @@ impl From<GoogleUsage> for TokenUsage {
 
 fn google_generate_content_stream(
     request: ProviderRequest,
+    should_cancel: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(ProviderEvent),
 ) -> Result<(), ProviderError> {
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
+
     let base_url = request
         .model
         .base_url
@@ -180,7 +203,7 @@ fn google_generate_content_stream(
         tool_config,
     };
 
-    let mut request_builder = reqwest::blocking::Client::new()
+    let mut request_builder = crate::shared_blocking_client()
         .post(url)
         .header("x-goog-api-key", api_key)
         .header(reqwest::header::ACCEPT, "text/event-stream");
@@ -188,6 +211,9 @@ fn google_generate_content_stream(
         request_builder = request_builder.header(key.as_str(), value.as_str());
     }
 
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
     let response = request_builder
         .json(&body)
         .send()
@@ -204,15 +230,23 @@ fn google_generate_content_stream(
     }
 
     let model = request.model;
-    let reader = BufReader::new(response);
+    let mut lines = BufReader::new(response).lines();
     let mut content = String::new();
     let mut usage = TokenUsage::default();
     emit(ProviderEvent::Start);
 
-    for line in reader.lines() {
+    while let Some(line) = {
+        if should_cancel() {
+            return Err(ProviderError::new("cancelled"));
+        }
+        lines.next()
+    } {
         let line =
             line.map_err(|error| ProviderError::new(format!("stream read failed: {error}")))?;
         for delta in parse_google_stream_line(&line)? {
+            if should_cancel() {
+                return Err(ProviderError::new("cancelled"));
+            }
             match delta {
                 StreamDelta::Text(delta) => {
                     content.push_str(&delta);
@@ -247,11 +281,9 @@ fn google_messages(
                     system_messages.push(message.content.clone());
                 }
             }
-            MessageRole::User => push_google_content(
-                &mut contents,
-                "user",
-                vec![GooglePart::text(message.content.clone())],
-            ),
+            MessageRole::User => {
+                push_google_content(&mut contents, "user", google_user_parts(message))
+            }
             MessageRole::Assistant => {
                 let mut parts = Vec::new();
                 if !message.content.trim().is_empty() {
@@ -312,6 +344,7 @@ fn google_tools(definitions: &[ToolDefinition]) -> Vec<GoogleTool> {
 fn google_function_call_part(call: &ToolCall) -> GooglePart {
     GooglePart {
         text: None,
+        inline_data: None,
         function_call: Some(GoogleFunctionCall {
             name: call.name.clone(),
             args: call.arguments.clone(),
@@ -324,6 +357,7 @@ fn google_function_call_part(call: &ToolCall) -> GooglePart {
 fn google_function_response_part(result: ToolResultView) -> GooglePart {
     GooglePart {
         text: None,
+        inline_data: None,
         function_call: None,
         function_response: Some(GoogleFunctionResponse {
             name: result.tool_name,
@@ -341,11 +375,34 @@ impl GooglePart {
     fn text(text: String) -> Self {
         Self {
             text: Some(text),
+            inline_data: None,
             function_call: None,
             function_response: None,
             thought: false,
         }
     }
+
+    fn image(image: &crate::ImageContent) -> Self {
+        Self {
+            text: None,
+            inline_data: Some(GoogleInlineData {
+                mime_type: image.mime_type.clone(),
+                data: image.data.clone(),
+            }),
+            function_call: None,
+            function_response: None,
+            thought: false,
+        }
+    }
+}
+
+fn google_user_parts(message: &ChatMessage) -> Vec<GooglePart> {
+    let mut parts = Vec::new();
+    if !message.content.trim().is_empty() {
+        parts.push(GooglePart::text(message.content.clone()));
+    }
+    parts.extend(message.images.iter().map(GooglePart::image));
+    parts
 }
 
 struct ToolResultView {

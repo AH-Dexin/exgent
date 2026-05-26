@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use exgent_ai::{DynamicProvider, Model};
+use exgent_ai::{DynamicProvider, ImageContent, Model};
 
 use crate::{
-    agent::{Agent, AgentSession, AgentSessionEvent},
+    agent::{Agent, AgentSession, AgentSessionEvent, SharedAgentHooks},
     auth::OAuthCredential,
-    config::RuntimeOptions,
+    config::{AgentLoopConfig, RuntimeOptions},
     localization::Locale,
     model_service::ModelService,
     models::CompatibleModelKind,
@@ -25,6 +25,7 @@ pub(crate) struct AppRuntime {
     model_service: ModelService,
     agent_session: AgentSession,
     project_dir: PathBuf,
+    agent_config: AgentLoopConfig,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,7 +62,8 @@ impl AppRuntime {
         model_service: ModelService,
         project_dir: PathBuf,
     ) -> Result<Self, String> {
-        let agent = build_agent(&model_service).ok();
+        let agent_config = options.agent;
+        let agent = build_agent(&model_service, agent_config).ok();
         let agent_session = AgentSession::create(
             &options,
             agent,
@@ -74,6 +76,7 @@ impl AppRuntime {
             model_service,
             agent_session,
             project_dir,
+            agent_config,
         })
     }
 
@@ -82,7 +85,8 @@ impl AppRuntime {
         model_service: ModelService,
         session_path: &Path,
     ) -> Result<Self, String> {
-        let agent = build_agent(&model_service).ok();
+        let agent_config = options.agent;
+        let agent = build_agent(&model_service, agent_config).ok();
         let agent_session = AgentSession::open_existing(
             &options,
             agent,
@@ -95,6 +99,7 @@ impl AppRuntime {
             model_service,
             agent_session,
             project_dir,
+            agent_config,
         })
     }
 
@@ -120,8 +125,9 @@ impl AppRuntime {
     pub fn reload(&mut self, options: &RuntimeOptions) -> Result<(), String> {
         let model_service = ModelService::load(options)?;
         self.model_service = model_service;
+        self.agent_config = options.agent;
         self.agent_session
-            .set_agent(build_agent(&self.model_service).ok());
+            .set_agent(build_agent(&self.model_service, self.agent_config).ok());
         self.agent_session
             .refresh_usage_totals(self.model_service.current_model());
         Ok(())
@@ -184,7 +190,7 @@ impl AppRuntime {
 
     fn refresh_current_model(&mut self) -> Result<(), String> {
         self.agent_session
-            .set_agent(Some(build_agent(&self.model_service)?));
+            .set_agent(Some(build_agent(&self.model_service, self.agent_config)?));
         Ok(())
     }
 
@@ -212,14 +218,14 @@ impl AppRuntime {
         self.model_service
             .set_enabled_model_indices(enabled_indices)?;
         self.agent_session
-            .set_agent(build_agent(&self.model_service).ok());
+            .set_agent(build_agent(&self.model_service, self.agent_config).ok());
         Ok(())
     }
 
     pub fn delete_model(&mut self, index: usize) -> Result<String, String> {
         let deleted = self.model_service.delete_model(index)?;
         self.agent_session
-            .set_agent(build_agent(&self.model_service).ok());
+            .set_agent(build_agent(&self.model_service, self.agent_config).ok());
         Ok(deleted)
     }
 
@@ -264,6 +270,17 @@ impl AppRuntime {
         self.model_service.set_theme(theme)
     }
 
+    pub fn keybindings(&self) -> crate::settings::KeyBindings {
+        self.model_service.keybindings()
+    }
+
+    pub fn set_keybindings(
+        &mut self,
+        keybindings: crate::settings::KeyBindings,
+    ) -> Result<(), String> {
+        self.model_service.set_keybindings(keybindings)
+    }
+
     pub fn session_message_count(&self) -> usize {
         self.agent_session.message_count()
     }
@@ -291,19 +308,47 @@ impl AppRuntime {
     #[cfg(test)]
     fn run_prompt(&mut self, prompt: &str) -> Result<Vec<AgentEvent>, String> {
         let mut events = Vec::new();
-        self.run_prompt_events(prompt, &mut |event| {
-            if let AgentSessionEvent::Agent(event) = event {
-                events.push(event);
-            }
-        })?;
+        self.run_prompt_events_cancellable(
+            prompt,
+            &crate::cancel::CancelToken::new(),
+            &mut |event| {
+                if let AgentSessionEvent::Agent(event) = event {
+                    events.push(event);
+                }
+            },
+        )?;
         Ok(events)
     }
 
-    pub fn run_prompt_events<F>(&mut self, prompt: &str, emit: &mut F) -> Result<(), String>
+    pub fn set_hooks(&mut self, hooks: SharedAgentHooks) {
+        self.agent_session.set_hooks(hooks);
+    }
+
+    pub fn run_prompt_events_cancellable<F>(
+        &mut self,
+        prompt: &str,
+        cancel: &crate::cancel::CancelToken,
+        emit: &mut F,
+    ) -> Result<(), String>
     where
         F: FnMut(AgentSessionEvent),
     {
-        self.agent_session.run_prompt_events(prompt, emit)
+        self.agent_session
+            .run_prompt_events_cancellable(prompt, cancel, emit)
+    }
+
+    pub fn run_prompt_events_with_images_cancellable<F>(
+        &mut self,
+        prompt: &str,
+        images: &[ImageContent],
+        cancel: &crate::cancel::CancelToken,
+        emit: &mut F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(AgentSessionEvent),
+    {
+        self.agent_session
+            .run_prompt_events_with_images_cancellable(prompt, images, cancel, emit)
     }
 
     pub fn subscribe_to_agent_session(
@@ -318,9 +363,12 @@ impl AppRuntime {
     }
 }
 
-fn build_agent(model_service: &ModelService) -> Result<Agent<DynamicProvider>, String> {
+fn build_agent(
+    model_service: &ModelService,
+    config: crate::config::AgentLoopConfig,
+) -> Result<Agent<DynamicProvider>, String> {
     let (model, provider) = model_service.current_model_with_provider()?;
-    Ok(Agent::new(model, provider))
+    Ok(Agent::with_config(model, provider, config))
 }
 
 fn model_status(model: &Model) -> ModelStatus {
@@ -507,6 +555,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let session = crate::session::Session::create_default_with_cwd(
             options.config_path.as_deref(),
@@ -620,6 +669,7 @@ mod tests {
 
         let mut runtime = AppRuntime::new(RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 
@@ -641,6 +691,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let mut registry = exgent_ai::ProviderRegistry::builtin();
         registry
@@ -676,6 +727,7 @@ mod tests {
 
         let mut runtime = AppRuntime::new(RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 
@@ -702,6 +754,7 @@ mod tests {
 
         let error = match AppRuntime::new(RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         }) {
             Ok(_) => panic!("startup should fail for invalid model config"),
             Err(error) => error,
@@ -709,6 +762,37 @@ mod tests {
 
         assert!(error.contains("failed to load models"));
         assert!(!dir.join("sessions").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hooks_block_tool_calls() {
+        use crate::agent::{AgentHooks, ToolExecutionResult};
+        use exgent_ai::ToolCall;
+        use std::sync::Arc;
+
+        let dir = test_dir("hooks_block_tool_calls");
+        let _ = std::fs::remove_dir_all(&dir);
+        configure_fake_model(&dir);
+
+        let mut runtime = new_fake_runtime(&dir);
+
+        struct BlockReads;
+        impl AgentHooks for BlockReads {
+            fn before_tool_call(&self, call: &ToolCall) -> Option<ToolExecutionResult> {
+                (call.name == "read")
+                    .then(|| ToolExecutionResult::error("read blocked by user policy"))
+            }
+        }
+        runtime.set_hooks(Arc::new(BlockReads));
+
+        let events = runtime.run_prompt("tool read Cargo.toml").unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCallEnd { name, is_error: true, content, .. }
+                if name == "read" && content == "read blocked by user policy"
+        )));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -725,6 +809,7 @@ mod tests {
         AppRuntime::new_with_provider_registry(
             RuntimeOptions {
                 config_path: Some(dir.display().to_string()),
+                ..RuntimeOptions::default()
             },
             exgent_ai::ProviderRegistry::builtin().with_dev_providers(),
         )

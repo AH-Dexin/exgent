@@ -38,6 +38,26 @@ pub(super) fn optional_usize_argument(call: &ToolCall, name: &str) -> io::Result
         .transpose()
 }
 
+pub(super) fn optional_string_argument<'a>(
+    call: &'a ToolCall,
+    name: &str,
+) -> io::Result<Option<&'a str>> {
+    match call.arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(value.as_str()))
+            }
+        }
+        Some(other) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid string argument {name}: {other}"),
+        )),
+    }
+}
+
 pub(super) fn optional_bool_argument(call: &ToolCall, name: &str) -> io::Result<Option<bool>> {
     call.arguments
         .get(name)

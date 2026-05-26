@@ -101,6 +101,90 @@ pub(super) fn builtin_definition(name: &str) -> ToolDefinition {
         .with_label("Run command")
         .with_prompt_snippet("Execute shell commands")
         .with_execution_mode(ToolExecutionMode::Sequential),
+        "ls" => ToolDefinition::new(
+            "ls",
+            "List entries in a directory, returning relative paths grouped by file vs. directory.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to list, relative to the project directory unless absolute. Defaults to the project root."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum number of entries to return. Defaults to 200."
+                    }
+                },
+                "additionalProperties": false
+            }),
+        )
+        .with_label("List directory")
+        .with_prompt_snippet("List directory entries (cheaper than bash ls)")
+        .with_execution_mode(ToolExecutionMode::Parallel),
+        "grep" => ToolDefinition::new(
+            "grep",
+            "Recursive substring search across files in the project. Skips common binary and VCS directories.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Literal substring to match. Matching is case-sensitive."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory or file to search. Defaults to the project root."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum number of matches to return. Defaults to 200."
+                    },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": "Match case-insensitively."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        )
+        .with_label("Grep")
+        .with_prompt_snippet("Substring search across files (cheaper than bash grep)")
+        .with_execution_mode(ToolExecutionMode::Parallel),
+        "find" => ToolDefinition::new(
+            "find",
+            "Recursively list files whose name contains the given substring. Skips common binary and VCS directories.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Substring matched against each file's name (not the full path)."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to walk. Defaults to the project root."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum number of paths to return. Defaults to 200."
+                    },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": "Match case-insensitively."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        )
+        .with_label("Find files")
+        .with_prompt_snippet("Find files by name substring")
+        .with_execution_mode(ToolExecutionMode::Parallel),
         _ => ToolDefinition::new(
             name,
             "Execute a registered tool.",

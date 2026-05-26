@@ -64,14 +64,6 @@ fn wrap_plain(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-pub(super) fn composer_height(width: u16) -> u16 {
-    if width < 50 {
-        4
-    } else {
-        3
-    }
-}
-
 pub(super) fn input_view(input: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(input) <= max_width {
         return input.to_string();

@@ -16,7 +16,16 @@ pub struct OpenAiCompatibleProvider;
 
 impl ProviderAdapter for OpenAiCompatibleProvider {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
-        if let Err(error) = openai_chat_completion_stream(request, emit) {
+        self.stream_events_cancellable(request, &|| false, emit);
+    }
+
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        if let Err(error) = openai_chat_completion_stream(request, should_cancel, emit) {
             emit(ProviderEvent::Error(error.to_string()));
         }
     }
@@ -132,8 +141,13 @@ impl From<OpenAiUsage> for TokenUsage {
 
 fn openai_chat_completion_stream(
     request: ProviderRequest,
+    should_cancel: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(ProviderEvent),
 ) -> Result<(), ProviderError> {
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
+
     let base_url = request
         .model
         .base_url
@@ -145,7 +159,7 @@ fn openai_chat_completion_stream(
     let tool_choice = (!tools.is_empty()).then_some("auto");
     let body = OpenAiChatRequest {
         model: request.model.id.clone(),
-        messages: openai_chat_messages(&request.messages),
+        messages: openai_chat_messages(&request.messages, &request.model),
         stream: true,
         stream_options: OpenAiStreamOptions {
             include_usage: true,
@@ -154,12 +168,15 @@ fn openai_chat_completion_stream(
         tool_choice,
     };
 
-    let request_builder = reqwest::blocking::Client::new()
+    let request_builder = crate::shared_blocking_client()
         .post(url)
         .bearer_auth(api_key)
         .header(reqwest::header::ACCEPT, "text/event-stream");
     let request_builder = apply_model_headers(request_builder, &request.model, &request.messages);
 
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
     let response = request_builder
         .json(&body)
         .send()
@@ -179,13 +196,21 @@ fn openai_chat_completion_stream(
     let mut content = String::new();
     let mut usage = TokenUsage::default();
     let mut tool_calls = ToolCallAccumulator::default();
-    let reader = BufReader::new(response);
+    let mut lines = BufReader::new(response).lines();
     emit(ProviderEvent::Start);
 
-    for line in reader.lines() {
+    while let Some(line) = {
+        if should_cancel() {
+            return Err(ProviderError::new("cancelled"));
+        }
+        lines.next()
+    } {
         let line =
             line.map_err(|error| ProviderError::new(format!("stream read failed: {error}")))?;
         for delta in parse_openai_stream_line(&line)? {
+            if should_cancel() {
+                return Err(ProviderError::new("cancelled"));
+            }
             match delta {
                 StreamDelta::Text(delta) => {
                     content.push_str(&delta);

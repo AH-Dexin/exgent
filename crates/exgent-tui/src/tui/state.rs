@@ -1,6 +1,7 @@
 use exgent_core::{
-    AgentEvent, AppRuntimeHost, AuthProviderInfo, CompatibleModelKind, Locale, ModelMenuItem,
-    ModelSettingsItem, SessionInfo, SubscriptionProviderInfo, ThemeSettings, UsageTotals,
+    AgentEvent, AppRuntimeHost, AuthProviderInfo, CompatibleModelKind, ImageContent, Locale,
+    ModelMenuItem, ModelSettingsItem, SessionInfo, SubscriptionProviderInfo, ThemeSettings,
+    UsageTotals,
 };
 
 use super::settings_actions::AuthProviderSettingsItem as AuthProviderItem;
@@ -10,6 +11,7 @@ type TuiRuntime = AppRuntimeHost;
 #[derive(Clone, Debug)]
 pub(super) struct TuiApp {
     pub(super) transcript: Vec<TranscriptItem>,
+    pub(super) transcript_scroll: usize,
     pub(super) composer: ComposerState,
     pub(super) overlay: Overlay,
     pub(super) model_label: String,
@@ -30,6 +32,7 @@ impl TuiApp {
     pub(super) fn new(runtime: &TuiRuntime) -> Self {
         let mut app = Self {
             transcript: Vec::new(),
+            transcript_scroll: 0,
             composer: ComposerState::default(),
             overlay: Overlay::None,
             model_label: String::new(),
@@ -81,6 +84,24 @@ impl TuiApp {
 
     pub(super) fn push_user(&mut self, input: impl Into<String>) {
         self.transcript.push(TranscriptItem::User(input.into()));
+    }
+
+    pub(super) fn push_user_with_images(&mut self, input: impl Into<String>, image_count: usize) {
+        let mut input = input.into();
+        if image_count > 0 {
+            let note = if image_count == 1 {
+                "[1 image]".to_string()
+            } else {
+                format!("[{image_count} images]")
+            };
+            if input.is_empty() {
+                input = note;
+            } else {
+                input.push('\n');
+                input.push_str(&note);
+            }
+        }
+        self.transcript.push(TranscriptItem::User(input));
     }
 
     pub(super) fn start_assistant(&mut self) {
@@ -156,11 +177,34 @@ impl TuiApp {
         if matches!(self.overlay, Overlay::ModelPicker(_)) {
             return;
         }
-        if self.composer.input.starts_with('/') {
+        if self.composer.images.is_empty()
+            && !self.composer.is_multiline()
+            && self.composer.input.starts_with('/')
+        {
             self.overlay = Overlay::SlashMenu { selected: 0 };
         } else if matches!(self.overlay, Overlay::SlashMenu { .. }) {
             self.overlay = Overlay::None;
         }
+    }
+
+    pub(super) fn scroll_transcript_up(&mut self, lines: usize) {
+        self.transcript_scroll = self.transcript_scroll.saturating_add(lines);
+    }
+
+    pub(super) fn scroll_transcript_down(&mut self, lines: usize) {
+        self.transcript_scroll = self.transcript_scroll.saturating_sub(lines);
+    }
+
+    pub(super) fn scroll_transcript_to_top(&mut self) {
+        self.transcript_scroll = usize::MAX;
+    }
+
+    pub(super) fn scroll_transcript_to_bottom(&mut self) {
+        self.transcript_scroll = 0;
+    }
+
+    pub(super) fn clamp_transcript_scroll(&mut self, max_scroll: usize) {
+        self.transcript_scroll = self.transcript_scroll.min(max_scroll);
     }
 }
 
@@ -175,9 +219,194 @@ fn project_dir_label(runtime: &TuiRuntime) -> String {
 #[derive(Clone, Debug, Default)]
 pub(super) struct ComposerState {
     pub(super) input: String,
+    pub(super) images: Vec<ImageContent>,
     pub(super) history: Vec<String>,
     pub(super) history_index: Option<usize>,
     pub(super) draft: String,
+    items: Vec<ComposerItem>,
+    cursor: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum ComposerItem {
+    Text(char),
+    Image(ImageContent),
+}
+
+impl ComposerState {
+    pub(super) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub(super) fn cursor(&self) -> usize {
+        self.cursor.min(self.items.len())
+    }
+
+    pub(super) fn items(&self) -> &[ComposerItem] {
+        &self.items
+    }
+
+    pub(super) fn is_multiline(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item, ComposerItem::Text('\n')))
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.input.clear();
+        self.images.clear();
+        self.items.clear();
+        self.cursor = 0;
+    }
+
+    pub(super) fn set_text(&mut self, text: impl AsRef<str>) {
+        let text = text.as_ref();
+        self.input = text.to_string();
+        self.images.clear();
+        self.items = text.chars().map(ComposerItem::Text).collect();
+        self.cursor = self.items.len();
+    }
+
+    pub(super) fn insert_char(&mut self, value: char) {
+        let index = self.cursor();
+        self.items.insert(index, ComposerItem::Text(value));
+        self.cursor = index + 1;
+        self.sync_input();
+    }
+
+    pub(super) fn insert_str(&mut self, value: &str) {
+        let value = value.replace("\r\n", "\n").replace('\r', "\n");
+        let items = value.chars().map(ComposerItem::Text).collect::<Vec<_>>();
+        if items.is_empty() {
+            return;
+        }
+        let index = self.cursor();
+        let len = items.len();
+        self.items.splice(index..index, items);
+        self.cursor = index + len;
+        self.sync_input();
+    }
+
+    pub(super) fn insert_image(&mut self, image: ImageContent) {
+        let index = self.cursor();
+        self.items.insert(index, ComposerItem::Image(image));
+        self.cursor = index + 1;
+        self.sync_images();
+    }
+
+    pub(super) fn backspace(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        let index = self.cursor - 1;
+        let removed = self.items.remove(index);
+        self.cursor = index;
+        match removed {
+            ComposerItem::Text(_) => self.sync_input(),
+            ComposerItem::Image(_) => self.sync_images(),
+        }
+        true
+    }
+
+    pub(super) fn move_cursor_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub(super) fn move_cursor_right(&mut self) {
+        self.cursor = self.cursor.saturating_add(1).min(self.items.len());
+    }
+
+    pub(super) fn move_cursor_to_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub(super) fn move_cursor_to_end(&mut self) {
+        self.cursor = self.items.len();
+    }
+
+    pub(super) fn move_cursor_up(&mut self) {
+        self.move_cursor_vertical(-1);
+    }
+
+    pub(super) fn move_cursor_down(&mut self) {
+        self.move_cursor_vertical(1);
+    }
+
+    pub(super) fn take_images_and_clear(&mut self) -> Vec<ImageContent> {
+        let items = std::mem::take(&mut self.items);
+        let images = items
+            .into_iter()
+            .filter_map(|item| match item {
+                ComposerItem::Image(image) => Some(image),
+                ComposerItem::Text(_) => None,
+            })
+            .collect();
+        self.input.clear();
+        self.images.clear();
+        self.cursor = 0;
+        images
+    }
+
+    fn move_cursor_vertical(&mut self, delta: isize) {
+        let lines = self.hard_line_bounds();
+        if lines.len() <= 1 {
+            return;
+        }
+
+        let cursor = self.cursor();
+        let Some((line_index, line_start, _line_end)) = lines
+            .iter()
+            .enumerate()
+            .find(|(_, (start, end))| cursor >= *start && cursor <= *end)
+            .map(|(index, (start, end))| (index, *start, *end))
+        else {
+            return;
+        };
+
+        let target_index = if delta < 0 {
+            line_index.saturating_sub(1)
+        } else {
+            (line_index + 1).min(lines.len() - 1)
+        };
+        if target_index == line_index {
+            return;
+        }
+
+        let column = cursor.saturating_sub(line_start);
+        let (target_start, target_end) = lines[target_index];
+        self.cursor = target_start + column.min(target_end.saturating_sub(target_start));
+    }
+
+    fn hard_line_bounds(&self) -> Vec<(usize, usize)> {
+        let mut lines = Vec::new();
+        let mut start = 0usize;
+        for (index, item) in self.items.iter().enumerate() {
+            if matches!(item, ComposerItem::Text('\n')) {
+                lines.push((start, index));
+                start = index + 1;
+            }
+        }
+        lines.push((start, self.items.len()));
+        lines
+    }
+
+    fn sync_input(&mut self) {
+        self.input.clear();
+        for item in &self.items {
+            if let ComposerItem::Text(ch) = item {
+                self.input.push(*ch);
+            }
+        }
+    }
+
+    fn sync_images(&mut self) {
+        self.images.clear();
+        for item in &self.items {
+            if let ComposerItem::Image(image) = item {
+                self.images.push(image.clone());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -292,6 +521,7 @@ pub(super) struct ApiKeyProviderState {
 #[derive(Clone, Debug)]
 pub(super) struct ApiKeyInputState {
     pub(super) provider: String,
+    pub(super) base_url: Option<String>,
     pub(super) value: String,
 }
 
@@ -361,6 +591,115 @@ pub(super) enum RuntimeActivity {
 pub(super) enum UiAction {
     None,
     Quit,
-    RunPrompt(String),
+    RunPrompt {
+        prompt: String,
+        images: Vec<ImageContent>,
+    },
     RunSubscriptionAuth(SubscriptionProviderInfo),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(data: &str) -> ImageContent {
+        ImageContent::new(data, "image/png")
+    }
+
+    #[test]
+    fn composer_treats_images_as_single_cursor_items() {
+        let mut composer = ComposerState::default();
+        composer.insert_char('a');
+        composer.insert_image(image("one"));
+        composer.insert_char('b');
+
+        assert_eq!(composer.input, "ab");
+        assert_eq!(composer.images, vec![image("one")]);
+        assert_eq!(composer.cursor(), 3);
+
+        composer.move_cursor_left();
+        assert_eq!(composer.cursor(), 2);
+        composer.move_cursor_left();
+        assert_eq!(composer.cursor(), 1);
+
+        composer.insert_char('x');
+        assert_eq!(composer.input, "axb");
+        assert_eq!(composer.cursor(), 2);
+
+        composer.move_cursor_right();
+        assert_eq!(composer.cursor(), 3);
+        assert!(composer.backspace());
+        assert_eq!(composer.input, "axb");
+        assert!(composer.images.is_empty());
+    }
+
+    #[test]
+    fn composer_drains_images_in_visual_order() {
+        let mut composer = ComposerState::default();
+        composer.insert_image(image("one"));
+        composer.insert_char('x');
+        composer.insert_image(image("two"));
+
+        assert_eq!(
+            composer.take_images_and_clear(),
+            vec![image("one"), image("two")]
+        );
+        assert!(composer.is_empty());
+        assert!(composer.input.is_empty());
+        assert!(composer.images.is_empty());
+    }
+
+    #[test]
+    fn composer_preserves_multiline_paste_and_normalizes_crlf() {
+        let mut composer = ComposerState::default();
+        composer.insert_str("one\r\ntwo\rthree");
+
+        assert_eq!(composer.input, "one\ntwo\nthree");
+        assert!(composer.is_multiline());
+        assert_eq!(composer.cursor(), "one\ntwo\nthree".chars().count());
+    }
+
+    #[test]
+    fn composer_moves_vertically_across_pasted_lines() {
+        let mut composer = ComposerState::default();
+        composer.insert_str("one\ntwo\nthree");
+
+        composer.move_cursor_up();
+        assert_eq!(composer.cursor(), "one\ntwo".chars().count());
+        composer.move_cursor_up();
+        assert_eq!(composer.cursor(), "one".chars().count());
+        composer.move_cursor_down();
+        assert_eq!(composer.cursor(), "one\ntwo".chars().count());
+    }
+
+    #[test]
+    fn transcript_scroll_state_moves_and_clamps() {
+        let mut app = TuiApp {
+            transcript: Vec::new(),
+            transcript_scroll: 0,
+            composer: ComposerState::default(),
+            overlay: Overlay::None,
+            model_label: String::new(),
+            session_id: String::new(),
+            cwd: String::new(),
+            usage: UsageTotals::default(),
+            model_context_window: None,
+            model_reasoning: false,
+            is_running: false,
+            runtime_activity: None,
+            show_reasoning: false,
+            locale: Locale::En,
+            theme: ThemeSettings::default(),
+            theme_preview: None,
+        };
+
+        app.scroll_transcript_up(20);
+        assert_eq!(app.transcript_scroll, 20);
+        app.scroll_transcript_down(7);
+        assert_eq!(app.transcript_scroll, 13);
+        app.clamp_transcript_scroll(5);
+        assert_eq!(app.transcript_scroll, 5);
+        app.scroll_transcript_to_bottom();
+        assert_eq!(app.transcript_scroll, 0);
+    }
 }

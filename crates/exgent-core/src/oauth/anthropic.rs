@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use reqwest::{blocking::Client, Url};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::OAuthCredential;
@@ -139,7 +139,7 @@ fn exchange_anthropic_authorization_code(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<OAuthCredential, String> {
-    let client = Client::new();
+    let client = exgent_ai::shared_blocking_client();
     let response = client
         .post(ANTHROPIC_TOKEN_URL)
         .header(reqwest::header::ACCEPT, "application/json")

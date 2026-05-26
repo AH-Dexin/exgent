@@ -1,23 +1,43 @@
 use exgent_ai::{ChatMessage, Model, ProviderAdapter};
 
+use crate::{cancel::CancelToken, config::AgentLoopConfig};
+
 use super::{agent_loop, AgentEvent, ToolExecutor};
 
 #[derive(Clone, Debug)]
 pub struct Agent<P> {
     model: Model,
     provider: P,
+    config: AgentLoopConfig,
 }
 
 impl<P> Agent<P>
 where
     P: ProviderAdapter,
 {
+    /// Build a new [`Agent`] using the [`AgentLoopConfig::default`] settings.
+    /// Public for downstream embedders that want to drive an agent without
+    /// going through [`AppRuntimeHost`](crate::AppRuntimeHost).
+    #[allow(dead_code)]
     pub fn new(model: Model, provider: P) -> Self {
-        Self { model, provider }
+        Self::with_config(model, provider, AgentLoopConfig::default())
+    }
+
+    pub fn with_config(model: Model, provider: P, config: AgentLoopConfig) -> Self {
+        Self {
+            model,
+            provider,
+            config,
+        }
     }
 
     pub fn model(&self) -> &Model {
         &self.model
+    }
+
+    #[allow(dead_code)]
+    pub fn config(&self) -> AgentLoopConfig {
+        self.config
     }
 
     #[cfg(test)]
@@ -40,7 +60,12 @@ where
         T: ToolExecutor,
         F: FnMut(AgentEvent),
     {
-        self.run_messages_with_tools_streaming(vec![ChatMessage::user(prompt)], tools, emit);
+        self.run_messages_with_tools_streaming(
+            vec![ChatMessage::user(prompt)],
+            tools,
+            &CancelToken::new(),
+            emit,
+        );
     }
 
     pub fn run_messages_with_tools<T>(
@@ -52,7 +77,10 @@ where
         T: ToolExecutor,
     {
         let mut events = Vec::new();
-        self.run_messages_with_tools_streaming(messages, tools, &mut |event| events.push(event));
+        let cancel = CancelToken::new();
+        self.run_messages_with_tools_streaming(messages, tools, &cancel, &mut |event| {
+            events.push(event)
+        });
         events
     }
 
@@ -60,6 +88,7 @@ where
         &self,
         messages: Vec<ChatMessage>,
         tools: &T,
+        cancel: &CancelToken,
         emit: &mut F,
     ) where
         T: ToolExecutor,
@@ -70,6 +99,8 @@ where
             &self.provider,
             messages,
             tools,
+            self.config,
+            cancel,
             emit,
         );
     }
@@ -78,6 +109,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
     use exgent_ai::{
         fake_model, AssistantMessage, FakeProvider, MessageRole, ProviderEvent, ProviderRequest,
         ToolCall, ToolDefinition, ToolExecutionMode,
@@ -215,6 +248,38 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct ReasoningThenToolProvider {
+        requests: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+    }
+
+    impl ProviderAdapter for ReasoningThenToolProvider {
+        fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
+            self.requests.lock().unwrap().push(request.messages.clone());
+            if request
+                .messages
+                .iter()
+                .any(|message| message.role == MessageRole::Tool)
+            {
+                emit(ProviderEvent::Start);
+                emit(ProviderEvent::TextDelta("done".to_string()));
+                emit(ProviderEvent::Done(Box::new(AssistantMessage {
+                    model: request.model,
+                    content: "done".to_string(),
+                })));
+                return;
+            }
+
+            emit(ProviderEvent::Start);
+            emit(ProviderEvent::ReasoningDelta("thinking".to_string()));
+            emit(ProviderEvent::ToolCall(ToolCall::new("call_1", "read")));
+            emit(ProviderEvent::Done(Box::new(AssistantMessage {
+                model: request.model,
+                content: String::new(),
+            })));
+        }
+    }
+
     #[test]
     fn executes_tool_call_and_continues_provider() {
         let agent = Agent::new(fake_model(), FakeProvider);
@@ -341,5 +406,28 @@ mod tests {
             event,
             AgentEvent::AssistantToolCalls { calls } if calls.len() == 1 && calls[0].id == "call_1"
         )));
+    }
+
+    #[test]
+    fn reasoning_is_replayed_after_tool_calls() {
+        let provider = ReasoningThenToolProvider::default();
+        let requests = Arc::clone(&provider.requests);
+        let agent = Agent::new(fake_model(), provider);
+
+        let events = agent.run_prompt_with_tools("inspect", &EchoTools);
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ReasoningDelta { delta } if delta == "thinking"
+        )));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let assistant = requests[1]
+            .iter()
+            .find(|message| {
+                message.role == MessageRole::Assistant && !message.tool_calls.is_empty()
+            })
+            .expect("assistant tool call should be replayed before tool result");
+        assert_eq!(assistant.reasoning.as_deref(), Some("thinking"));
     }
 }

@@ -9,11 +9,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     Frame,
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::formatting::{
-    auth_status_text, centered_rect, composer_height, format_context_usage, format_tokens,
-    input_view, mask_secret, styled_wrapped_lines, truncate_plain,
+    auth_status_text, centered_rect, format_context_usage, format_tokens, mask_secret,
+    styled_wrapped_lines, truncate_plain,
 };
 use super::render_helpers::{
     dialog_block, item_lines, model_settings_rows, runtime_activity_text, selected_style,
@@ -24,6 +24,8 @@ use super::suggestions::slash_suggestions;
 
 const SIDEBAR_MIN_WIDTH: u16 = 100;
 const SIDEBAR_WIDTH: u16 = 36;
+const COMPOSER_MAX_HEIGHT: u16 = 10;
+const COMPOSER_PROMPT: &str = "> ";
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &mut TuiApp) {
     let area = frame.area();
@@ -36,7 +38,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &mut TuiApp) {
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(composer_height(area.width)),
+            Constraint::Length(composer_height(area, &app.composer)),
             Constraint::Length(1),
         ])
         .split(area);
@@ -80,8 +82,23 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     Paragraph::new(line).render(area, frame.buffer_mut());
 }
 
-fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut TuiApp) {
     let width = usize::from(area.width).max(1);
+    let lines = transcript_lines(app, width);
+    let height = usize::from(area.height);
+    let (start, scroll) = transcript_visible_start(lines.len(), height, app.transcript_scroll);
+    app.clamp_transcript_scroll(scroll);
+
+    let visible = lines
+        .into_iter()
+        .skip(start)
+        .take(height)
+        .collect::<Vec<_>>();
+    Paragraph::new(Text::from(visible)).render(area, frame.buffer_mut());
+}
+
+fn transcript_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
     let mut lines = Vec::new();
     for item in &app.transcript {
         let mut item_lines = item_lines(item, width);
@@ -106,10 +123,17 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             Style::default().fg(Color::DarkGray),
         )));
     }
+    lines
+}
 
-    let start = lines.len().saturating_sub(usize::from(area.height));
-    let visible = lines.into_iter().skip(start).collect::<Vec<_>>();
-    Paragraph::new(Text::from(visible)).render(area, frame.buffer_mut());
+fn transcript_visible_start(
+    line_count: usize,
+    viewport_height: usize,
+    scroll: usize,
+) -> (usize, usize) {
+    let bottom_start = line_count.saturating_sub(viewport_height);
+    let scroll = scroll.min(bottom_start);
+    (bottom_start.saturating_sub(scroll), scroll)
 }
 
 fn render_sidebar(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -189,27 +213,208 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let title = if app.composer.images.is_empty() {
+        tr(app.locale, MessageId::ComposerTitle).to_string()
+    } else if app.composer.images.len() == 1 {
+        format!("{} (1 image)", tr(app.locale, MessageId::ComposerTitle))
+    } else {
+        format!(
+            "{} ({} images)",
+            tr(app.locale, MessageId::ComposerTitle),
+            app.composer.images.len()
+        )
+    };
     let block = Block::default()
-        .title(tr(app.locale, MessageId::ComposerTitle))
+        .title(title)
         .borders(Borders::ALL)
         .border_set(symbols::border::ROUNDED)
         .border_style(Style::default().fg(theme_color(app)));
     let inner = block.inner(area);
     block.render(area, frame.buffer_mut());
 
-    let prompt = "> ";
-    let input_width = usize::from(inner.width).saturating_sub(UnicodeWidthStr::width(prompt));
-    let visible_input = input_view(&app.composer.input, input_width);
-    let line = Line::from(vec![
-        Span::styled(prompt, Style::default().fg(theme_color(app))),
-        Span::raw(visible_input.clone()),
-    ]);
-    Paragraph::new(line).render(inner, frame.buffer_mut());
+    let prompt = COMPOSER_PROMPT;
+    let prompt_width = UnicodeWidthStr::width(prompt);
+    let input_width = usize::from(inner.width).saturating_sub(prompt_width);
+    let prompt_style = Style::default().fg(theme_color(app));
+    let input_view = composer_input_view(
+        &app.composer,
+        input_width,
+        usize::from(inner.height).max(1),
+        prompt_style.add_modifier(Modifier::BOLD),
+    );
+    let lines = input_view
+        .lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut spans)| {
+            let prefix = if index == 0 {
+                prompt.to_string()
+            } else {
+                " ".repeat(prompt_width)
+            };
+            let mut line_spans = vec![Span::styled(prefix, prompt_style)];
+            line_spans.append(&mut spans);
+            Line::from(line_spans)
+        })
+        .collect::<Vec<_>>();
+    Paragraph::new(Text::from(lines)).render(inner, frame.buffer_mut());
 
-    let cursor_x = UnicodeWidthStr::width(prompt)
-        .saturating_add(UnicodeWidthStr::width(visible_input.as_str()))
+    let cursor_x = prompt_width
+        .saturating_add(input_view.cursor_x)
         .min(usize::from(inner.width.saturating_sub(1))) as u16;
-    frame.set_cursor_position(Position::new(inner.x.saturating_add(cursor_x), inner.y));
+    let cursor_y = input_view
+        .cursor_y
+        .min(usize::from(inner.height.saturating_sub(1))) as u16;
+    frame.set_cursor_position(Position::new(
+        inner.x.saturating_add(cursor_x),
+        inner.y.saturating_add(cursor_y),
+    ));
+}
+
+fn composer_height(area: Rect, composer: &ComposerState) -> u16 {
+    let min_height = if area.width < 50 { 4 } else { 3 };
+    let max_height = area
+        .height
+        .saturating_sub(2)
+        .max(1)
+        .min(COMPOSER_MAX_HEIGHT);
+    let inner_width = area.width.saturating_sub(2);
+    let input_width =
+        usize::from(inner_width).saturating_sub(UnicodeWidthStr::width(COMPOSER_PROMPT));
+    let desired = (composer_visual_line_count(composer, input_width) as u16)
+        .saturating_add(2)
+        .max(min_height);
+    desired.min(max_height).max(1)
+}
+
+struct ComposerInputView {
+    lines: Vec<Vec<Span<'static>>>,
+    cursor_x: usize,
+    cursor_y: usize,
+}
+
+#[derive(Clone)]
+struct ComposerDisplayCell {
+    text: String,
+    width: usize,
+    style: Style,
+}
+
+enum ComposerDisplayItem {
+    Cell(ComposerDisplayCell),
+    Newline,
+}
+
+#[derive(Default)]
+struct ComposerVisualLine {
+    spans: Vec<Span<'static>>,
+    width: usize,
+}
+
+fn composer_input_view(
+    composer: &ComposerState,
+    max_width: usize,
+    max_lines: usize,
+    image_style: Style,
+) -> ComposerInputView {
+    let (lines, cursor_y, cursor_x) = composer_visual_lines(composer, max_width, image_style);
+    let total = lines.len().max(1);
+    let max_lines = max_lines.max(1);
+    let cursor_y = cursor_y.min(total - 1);
+    let start = cursor_y
+        .saturating_add(1)
+        .saturating_sub(max_lines)
+        .min(total.saturating_sub(max_lines));
+    let visible = lines
+        .into_iter()
+        .skip(start)
+        .take(max_lines)
+        .map(|line| line.spans)
+        .collect::<Vec<_>>();
+
+    ComposerInputView {
+        lines: visible,
+        cursor_x,
+        cursor_y: cursor_y.saturating_sub(start),
+    }
+}
+
+fn composer_visual_line_count(composer: &ComposerState, max_width: usize) -> usize {
+    composer_visual_lines(composer, max_width, Style::default())
+        .0
+        .len()
+}
+
+fn composer_visual_lines(
+    composer: &ComposerState,
+    max_width: usize,
+    image_style: Style,
+) -> (Vec<ComposerVisualLine>, usize, usize) {
+    let max_width = max_width.max(1);
+    let items = composer_display_items(composer, image_style);
+    let cursor = composer.cursor().min(items.len());
+    let mut lines = Vec::new();
+    let mut line = ComposerVisualLine::default();
+    let mut cursor_position = None;
+
+    for (index, item) in items.into_iter().enumerate() {
+        match item {
+            ComposerDisplayItem::Newline => {
+                if cursor == index {
+                    cursor_position = Some((lines.len(), line.width));
+                }
+                lines.push(line);
+                line = ComposerVisualLine::default();
+            }
+            ComposerDisplayItem::Cell(cell) => {
+                if line.width > 0 && line.width + cell.width > max_width {
+                    lines.push(line);
+                    line = ComposerVisualLine::default();
+                }
+                if cursor == index {
+                    cursor_position = Some((lines.len(), line.width));
+                }
+                line.width = line.width.saturating_add(cell.width);
+                line.spans.push(Span::styled(cell.text, cell.style));
+            }
+        }
+    }
+
+    if cursor == composer.cursor().min(composer.items().len()) {
+        cursor_position.get_or_insert((lines.len(), line.width));
+    }
+    lines.push(line);
+    let (cursor_y, cursor_x) = cursor_position.unwrap_or((0, 0));
+    (lines, cursor_y, cursor_x)
+}
+
+fn composer_display_items(
+    composer: &ComposerState,
+    image_style: Style,
+) -> Vec<ComposerDisplayItem> {
+    let mut image_index = 0usize;
+    composer
+        .items()
+        .iter()
+        .map(|item| match item {
+            ComposerItem::Text('\n') => ComposerDisplayItem::Newline,
+            ComposerItem::Text(ch) => ComposerDisplayItem::Cell(ComposerDisplayCell {
+                text: ch.to_string(),
+                width: UnicodeWidthChar::width(*ch).unwrap_or(0),
+                style: Style::default(),
+            }),
+            ComposerItem::Image(_) => {
+                image_index += 1;
+                let text = format!("[Image #{image_index}]");
+                let width = UnicodeWidthStr::width(text.as_str());
+                ComposerDisplayItem::Cell(ComposerDisplayCell {
+                    text,
+                    width,
+                    style: image_style,
+                })
+            }
+        })
+        .collect()
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -865,19 +1070,21 @@ fn render_api_key_input(
     Clear.render(popup, frame.buffer_mut());
 
     let inner_width = usize::from(width.saturating_sub(2));
-    let token = if state.value.is_empty() {
-        tr(locale, MessageId::BlankRemovesStoredToken).to_string()
+    let api_key = if state.value.is_empty() {
+        tr(locale, MessageId::FieldApiKeyHint).to_string()
     } else {
         mask_secret(&state.value)
     };
+    let url = state.base_url.as_deref().unwrap_or("-");
+    let title = format!(
+        "{}: {}",
+        tr(locale, MessageId::FieldProvider),
+        state.provider
+    );
     let lines = [
-        format!(
-            "{}: {}",
-            tr(locale, MessageId::FieldProvider),
-            state.provider
-        ),
+        format!("{}: {url}", tr(locale, MessageId::FieldUrl)),
         String::new(),
-        format!("token: {token}"),
+        format!("API_KEY: {api_key}"),
         String::new(),
         tr(locale, MessageId::EnterSavesEscapeCancels).to_string(),
     ]
@@ -886,10 +1093,7 @@ fn render_api_key_input(
     .collect::<Vec<_>>();
 
     Paragraph::new(Text::from(lines))
-        .block(dialog_block(
-            tr(locale, MessageId::DialogProviderToken),
-            accent,
-        ))
+        .block(dialog_block(&title, accent))
         .render(popup, frame.buffer_mut());
 }
 
@@ -1062,4 +1266,83 @@ fn render_auth_progress(
         .block(dialog_block(&state.title, accent))
         .wrap(Wrap { trim: false })
         .render(popup, frame.buffer_mut());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use exgent_core::ImageContent;
+
+    fn span_text(view: &ComposerInputView) -> String {
+        view.lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn composer_view_renders_inline_image_blocks() {
+        let mut composer = ComposerState::default();
+        composer.insert_image(ImageContent::new("one", "image/png"));
+        composer.insert_image(ImageContent::new("two", "image/png"));
+
+        let view = composer_input_view(&composer, 80, 4, Style::default());
+
+        assert_eq!(span_text(&view), "[Image #1][Image #2]");
+        assert_eq!(view.cursor_x, "[Image #1][Image #2]".width());
+        assert_eq!(view.cursor_y, 0);
+    }
+
+    #[test]
+    fn composer_view_cursor_moves_over_image_blocks() {
+        let mut composer = ComposerState::default();
+        composer.insert_char('a');
+        composer.insert_image(ImageContent::new("one", "image/png"));
+        composer.insert_char('b');
+        composer.move_cursor_left();
+        composer.move_cursor_left();
+
+        let view = composer_input_view(&composer, 80, 4, Style::default());
+
+        assert_eq!(span_text(&view), "a[Image #1]b");
+        assert_eq!(view.cursor_x, "a".width());
+        assert_eq!(view.cursor_y, 0);
+    }
+
+    #[test]
+    fn composer_view_renders_multiline_paste() {
+        let mut composer = ComposerState::default();
+        composer.insert_str("first\nsecond");
+
+        let view = composer_input_view(&composer, 80, 4, Style::default());
+
+        assert_eq!(span_text(&view), "first\nsecond");
+        assert_eq!(view.cursor_x, "second".width());
+        assert_eq!(view.cursor_y, 1);
+    }
+
+    #[test]
+    fn composer_view_scrolls_to_cursor_line() {
+        let mut composer = ComposerState::default();
+        composer.insert_str("one\ntwo\nthree");
+
+        let view = composer_input_view(&composer, 80, 2, Style::default());
+
+        assert_eq!(span_text(&view), "two\nthree");
+        assert_eq!(view.cursor_x, "three".width());
+        assert_eq!(view.cursor_y, 1);
+    }
+
+    #[test]
+    fn transcript_visible_start_scrolls_from_bottom() {
+        assert_eq!(transcript_visible_start(20, 5, 0), (15, 0));
+        assert_eq!(transcript_visible_start(20, 5, 3), (12, 3));
+        assert_eq!(transcript_visible_start(20, 5, usize::MAX), (0, 15));
+        assert_eq!(transcript_visible_start(3, 5, 10), (0, 0));
+    }
 }

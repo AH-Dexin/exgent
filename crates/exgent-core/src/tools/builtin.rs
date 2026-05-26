@@ -3,8 +3,10 @@ use std::{io, path::Path};
 use exgent_ai::{ToolCall, ToolDefinition};
 
 use super::registry::{Tool, ToolRegistry};
+use crate::cancel::CancelToken;
 use definitions::builtin_definition;
 use files::{execute_edit_call, execute_read_call, execute_write_call};
+use search::{execute_find_call, execute_grep_call, execute_ls_call};
 use shell::execute_bash_call;
 
 #[cfg(test)]
@@ -13,6 +15,7 @@ use crate::agent::ToolExecutor;
 mod arguments;
 mod definitions;
 mod files;
+mod search;
 mod shell;
 
 pub(super) fn register_builtin_tools(registry: &mut ToolRegistry) -> io::Result<()> {
@@ -20,16 +23,21 @@ pub(super) fn register_builtin_tools(registry: &mut ToolRegistry) -> io::Result<
     registry.register(BuiltinTool::new("write", execute_write_call))?;
     registry.register(BuiltinTool::new("edit", execute_edit_call))?;
     registry.register(BuiltinTool::new("bash", execute_bash_call))?;
+    registry.register(BuiltinTool::new("ls", execute_ls_call))?;
+    registry.register(BuiltinTool::new("grep", execute_grep_call))?;
+    registry.register(BuiltinTool::new("find", execute_find_call))?;
     Ok(())
 }
 
+type BuiltinExecutor = fn(&ToolCall, &Path, &CancelToken) -> io::Result<ToolOutput>;
+
 struct BuiltinTool {
     definition: ToolDefinition,
-    execute: fn(&ToolCall, &Path) -> io::Result<ToolOutput>,
+    execute: BuiltinExecutor,
 }
 
 impl BuiltinTool {
-    fn new(name: &'static str, execute: fn(&ToolCall, &Path) -> io::Result<ToolOutput>) -> Self {
+    fn new(name: &'static str, execute: BuiltinExecutor) -> Self {
         Self {
             definition: builtin_definition(name),
             execute,
@@ -46,14 +54,23 @@ impl Tool for BuiltinTool {
         self.definition.clone()
     }
 
-    fn execute_call(&self, call: &ToolCall, project_dir: &Path) -> io::Result<ToolOutput> {
-        (self.execute)(call, project_dir)
+    fn execute_call(
+        &self,
+        call: &ToolCall,
+        project_dir: &Path,
+        cancel: &CancelToken,
+    ) -> io::Result<ToolOutput> {
+        (self.execute)(call, project_dir, cancel)
     }
 }
 
+/// Result returned by a [`Tool::execute_call`] implementation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolOutput {
+    /// Display name for the tool that produced this output.
     pub tool_name: String,
+    /// Content delivered back to the agent loop. The agent loop treats it as
+    /// the assistant-facing payload verbatim.
     pub content: String,
 }
 
@@ -70,7 +87,7 @@ mod tests {
             .find(|definition| definition.name == "read")
             .unwrap();
 
-        assert_eq!(definitions.len(), 4);
+        assert_eq!(definitions.len(), 7);
         assert_eq!(read.parameters["required"], json!(["path"]));
         assert_eq!(read.parameters["properties"]["path"]["type"], "string");
     }
@@ -79,7 +96,10 @@ mod tests {
     fn loads_builtin_tools() {
         let registry = ToolRegistry::default_builtin_in(".");
 
-        assert_eq!(registry.names(), vec!["read", "write", "edit", "bash"]);
+        assert_eq!(
+            registry.names(),
+            vec!["read", "write", "edit", "bash", "ls", "grep", "find"]
+        );
     }
 
     #[test]

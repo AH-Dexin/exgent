@@ -11,6 +11,7 @@ impl From<CliOptions> for exgent_core::RuntimeOptions {
     fn from(options: CliOptions) -> Self {
         Self {
             config_path: options.config_path,
+            ..Self::default()
         }
     }
 }

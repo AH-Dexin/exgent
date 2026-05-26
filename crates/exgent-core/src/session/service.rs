@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use exgent_ai::{ChatMessage, MessageRole as ChatMessageRole, TokenUsage, ToolCall};
+use exgent_ai::{ChatMessage, ImageContent, MessageRole as ChatMessageRole, TokenUsage, ToolCall};
 
 use crate::config::RuntimeOptions;
 
@@ -44,9 +44,29 @@ impl SessionService {
             .map_err(|error| format!("failed to write user message: {error}"))
     }
 
+    pub fn append_user_with_images(
+        &mut self,
+        content: &str,
+        images: Vec<ImageContent>,
+    ) -> Result<(), String> {
+        self.session
+            .append_user_with_images(content, images)
+            .map_err(|error| format!("failed to write user message: {error}"))
+    }
+
     pub fn append_assistant(&mut self, content: String) -> Result<(), String> {
         self.session
             .append_assistant(content)
+            .map_err(|error| format!("failed to write assistant message: {error}"))
+    }
+
+    pub fn append_assistant_with_reasoning(
+        &mut self,
+        content: String,
+        reasoning: Option<String>,
+    ) -> Result<(), String> {
+        self.session
+            .append_assistant_with_reasoning(content, reasoning)
             .map_err(|error| format!("failed to write assistant message: {error}"))
     }
 
@@ -58,6 +78,18 @@ impl SessionService {
     ) -> Result<(), String> {
         self.session
             .append_assistant_tool_calls(content, calls, usage)
+            .map_err(|error| format!("failed to write assistant tool calls: {error}"))
+    }
+
+    pub fn append_assistant_tool_calls_with_reasoning(
+        &mut self,
+        content: String,
+        reasoning: Option<String>,
+        calls: Vec<ToolCall>,
+        usage: Option<TokenUsage>,
+    ) -> Result<(), String> {
+        self.session
+            .append_assistant_tool_calls_with_reasoning(content, reasoning, calls, usage)
             .map_err(|error| format!("failed to write assistant tool calls: {error}"))
     }
 
@@ -93,6 +125,17 @@ impl SessionService {
     ) -> Result<(), String> {
         self.session
             .append_assistant_with_usage(content, usage)
+            .map_err(|error| format!("failed to write assistant message: {error}"))
+    }
+
+    pub fn append_assistant_with_reasoning_and_usage(
+        &mut self,
+        content: String,
+        reasoning: Option<String>,
+        usage: TokenUsage,
+    ) -> Result<(), String> {
+        self.session
+            .append_assistant_with_reasoning_and_usage(content, reasoning, usage)
             .map_err(|error| format!("failed to write assistant message: {error}"))
     }
 
@@ -209,6 +252,18 @@ fn build_compaction_summary(messages: &[ChatMessage]) -> String {
         summary.push('\n');
     }
 
+    let file_ops = extract_file_operations(messages);
+    if !file_ops.read.is_empty() {
+        summary.push_str("- Files read: ");
+        summary.push_str(&file_ops.read.join(", "));
+        summary.push('\n');
+    }
+    if !file_ops.modified.is_empty() {
+        summary.push_str("- Files modified: ");
+        summary.push_str(&file_ops.modified.join(", "));
+        summary.push('\n');
+    }
+
     let tool_call_count = messages
         .iter()
         .map(|message| message.tool_calls.len())
@@ -320,6 +375,9 @@ fn summarize_message(message: &ChatMessage) -> String {
         summary.push_str(": ");
         summary.push_str(&truncate_single_line(&message.content, 180));
     }
+    if !message.images.is_empty() {
+        summary.push_str(&format!(" [{} image(s)]", message.images.len()));
+    }
 
     summary
 }
@@ -331,6 +389,40 @@ fn role_label(role: &ChatMessageRole) -> &'static str {
         ChatMessageRole::Tool => "tool",
         ChatMessageRole::System => "system",
     }
+}
+
+#[derive(Default)]
+struct FileOperations {
+    read: Vec<String>,
+    modified: Vec<String>,
+}
+
+fn extract_file_operations(messages: &[ChatMessage]) -> FileOperations {
+    let mut ops = FileOperations::default();
+    let mut seen_read = std::collections::BTreeSet::new();
+    let mut seen_modified = std::collections::BTreeSet::new();
+    for message in messages {
+        for call in &message.tool_calls {
+            let Some(path) = call
+                .arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let path = path.to_string();
+            match call.name.as_str() {
+                "read" | "ls" if seen_read.insert(path.clone()) => {
+                    ops.read.push(path);
+                }
+                "write" | "edit" if seen_modified.insert(path.clone()) => {
+                    ops.modified.push(path);
+                }
+                _ => {}
+            }
+        }
+    }
+    ops
 }
 
 fn truncate_single_line(content: &str, max_chars: usize) -> String {
@@ -371,5 +463,27 @@ mod tests {
         assert!(summary.contains("- Tool calls requested: 1"));
         assert!(summary.contains("assistant requested tools: read"));
         assert!(summary.contains("tool read ok [call_1]: workspace = true"));
+        assert!(summary.contains("- Files read: Cargo.toml"));
+    }
+
+    #[test]
+    fn compaction_summary_tracks_written_files() {
+        let messages = vec![
+            ChatMessage::user("update README"),
+            ChatMessage::assistant_tool_calls(
+                "",
+                vec![
+                    ToolCall::new("call_1", "write")
+                        .with_argument("path", "README.md")
+                        .with_argument("content", "new"),
+                    ToolCall::new("call_2", "edit").with_argument("path", "Cargo.toml"),
+                ],
+            ),
+            ChatMessage::tool_result("call_1", "write", "wrote 100 bytes", false),
+            ChatMessage::tool_result("call_2", "edit", "applied 1 replacement", false),
+        ];
+
+        let summary = build_compaction_summary(&messages);
+        assert!(summary.contains("- Files modified: README.md, Cargo.toml"));
     }
 }

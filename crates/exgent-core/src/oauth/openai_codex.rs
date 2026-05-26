@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use reqwest::{blocking::Client, Url};
+use reqwest::Url;
 use serde::Deserialize;
 
 use crate::auth::OAuthCredential;
@@ -127,7 +127,7 @@ fn exchange_openai_codex_authorization_code(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<OAuthCredential, String> {
-    let client = Client::new();
+    let client = exgent_ai::shared_blocking_client();
     let response = client
         .post(OPENAI_CODEX_TOKEN_URL)
         .header(reqwest::header::ACCEPT, "application/json")

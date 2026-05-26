@@ -5,7 +5,7 @@ use exgent_core::{tr, AppRuntimeHost, MessageId};
 
 use super::auth_flow::run_subscription_auth;
 use super::composer_input::handle_paste;
-use super::input::handle_key;
+use super::input::{handle_key, handle_mouse};
 use super::prompt::run_prompt;
 use super::render::render;
 use super::state::*;
@@ -30,8 +30,8 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
                 match handle_key(&mut app, runtime, key) {
                     UiAction::None => {}
                     UiAction::Quit => return Ok(()),
-                    UiAction::RunPrompt(prompt) => {
-                        run_prompt(runtime, &mut app, &mut terminal, prompt)?;
+                    UiAction::RunPrompt { prompt, images } => {
+                        run_prompt(runtime, &mut app, &mut terminal, prompt, images)?;
                     }
                     UiAction::RunSubscriptionAuth(provider) => {
                         run_subscription_auth(runtime, &mut app, &mut terminal, provider)?;
@@ -43,6 +43,9 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
             }
             Event::Paste(value) => {
                 handle_paste(&mut app, &value);
+            }
+            Event::Mouse(mouse) => {
+                handle_mouse(&mut app, mouse);
             }
             _ => {}
         }

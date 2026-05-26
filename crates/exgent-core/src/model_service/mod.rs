@@ -33,6 +33,9 @@ pub struct ModelService {
 pub struct AuthProviderInfo {
     pub provider: String,
     pub has_token: bool,
+    /// Base URL of the first model registered under this provider, if any.
+    /// Used by the auth flow to show users which endpoint their key will hit.
+    pub base_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,7 +78,11 @@ pub struct ModelSettingsItem {
 
 impl ModelService {
     pub fn load(options: &RuntimeOptions) -> Result<Self, String> {
-        Self::load_with_provider_registry(options, ProviderRegistry::builtin())
+        let mut registry = ProviderRegistry::builtin();
+        if options.enable_dev_providers {
+            registry = registry.with_dev_providers();
+        }
+        Self::load_with_provider_registry(options, registry)
     }
 
     pub(crate) fn load_with_provider_registry(
@@ -139,6 +146,7 @@ impl ModelService {
             providers.push(AuthProviderInfo {
                 provider: model.provider.clone(),
                 has_token: self.auth.has_api_key(&model.provider),
+                base_url: model.base_url.clone(),
             });
         }
         providers
@@ -354,6 +362,19 @@ impl ModelService {
         self.save_settings(previous)
     }
 
+    pub fn keybindings(&self) -> crate::settings::KeyBindings {
+        self.settings.keybindings().clone()
+    }
+
+    pub fn set_keybindings(
+        &mut self,
+        keybindings: crate::settings::KeyBindings,
+    ) -> Result<(), String> {
+        let previous = self.snapshot();
+        self.settings.set_keybindings(keybindings);
+        self.save_settings(previous)
+    }
+
     pub fn set_enabled_model_indices(&mut self, enabled_indices: &[usize]) -> Result<(), String> {
         let previous = self.snapshot();
         let mut selections_by_provider =
@@ -562,6 +583,7 @@ mod tests {
 
         let mut service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
         let test_model_index = service
@@ -574,6 +596,7 @@ mod tests {
         service.select_model(test_model_index).unwrap();
         let loaded = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 
@@ -635,6 +658,7 @@ mod tests {
 
         let service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 
@@ -685,6 +709,7 @@ mod tests {
 
         let mut service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
         let visible_index = service
@@ -730,6 +755,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.to_str().unwrap().to_string()),
+            ..RuntimeOptions::default()
         };
         let service = ModelService::load(&options).unwrap();
         let models = service.selectable_models();
@@ -749,6 +775,7 @@ mod tests {
 
         let mut service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 
@@ -766,6 +793,7 @@ mod tests {
         assert_eq!(service.model_label(), "anthropic-proxy/claude-sonnet-4-5");
         let loaded = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
         assert!(loaded.selectable_models().iter().any(|model| {
@@ -783,6 +811,7 @@ mod tests {
 
         let mut service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 
@@ -800,6 +829,7 @@ mod tests {
         assert_eq!(service.model_label(), "google-proxy/gemini-test");
         let loaded = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
         assert!(loaded.selectable_models().iter().any(|model| {
@@ -822,6 +852,7 @@ mod tests {
 
         let mut service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
         let anthropic_index = service
@@ -847,6 +878,7 @@ mod tests {
 
         let mut service = ModelService::load(&RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         })
         .unwrap();
 

@@ -4,8 +4,15 @@ use std::{
 };
 
 use crate::{
-    agent::AgentSessionEvent, auth::OAuthCredential, config::RuntimeOptions, localization::Locale,
-    models::CompatibleModelKind, session::SessionInfo, settings::ThemeSettings,
+    agent::{AgentSessionEvent, SharedAgentHooks},
+    auth::OAuthCredential,
+    cancel::CancelToken,
+    config::RuntimeOptions,
+    localization::Locale,
+    models::CompatibleModelKind,
+    session::SessionInfo,
+    settings::ThemeSettings,
+    ImageContent,
 };
 
 use super::app::{
@@ -175,6 +182,17 @@ impl AppRuntimeHost {
         self.runtime.set_theme(theme)
     }
 
+    pub fn keybindings(&self) -> crate::settings::KeyBindings {
+        self.runtime.keybindings()
+    }
+
+    pub fn set_keybindings(
+        &mut self,
+        keybindings: crate::settings::KeyBindings,
+    ) -> Result<(), String> {
+        self.runtime.set_keybindings(keybindings)
+    }
+
     pub fn session_message_count(&self) -> usize {
         self.runtime.session_message_count()
     }
@@ -199,7 +217,56 @@ impl AppRuntimeHost {
     where
         F: FnMut(AgentSessionEvent),
     {
-        self.runtime.run_prompt_events(prompt, emit)
+        self.runtime
+            .run_prompt_events_cancellable(prompt, &CancelToken::new(), emit)
+    }
+
+    pub fn run_prompt_events_with_images<F>(
+        &mut self,
+        prompt: &str,
+        images: &[ImageContent],
+        emit: &mut F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(AgentSessionEvent),
+    {
+        self.runtime.run_prompt_events_with_images_cancellable(
+            prompt,
+            images,
+            &CancelToken::new(),
+            emit,
+        )
+    }
+
+    pub fn set_hooks(&mut self, hooks: SharedAgentHooks) {
+        self.runtime.set_hooks(hooks);
+    }
+
+    pub fn run_prompt_events_cancellable<F>(
+        &mut self,
+        prompt: &str,
+        cancel: &CancelToken,
+        emit: &mut F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(AgentSessionEvent),
+    {
+        self.runtime
+            .run_prompt_events_cancellable(prompt, cancel, emit)
+    }
+
+    pub fn run_prompt_events_with_images_cancellable<F>(
+        &mut self,
+        prompt: &str,
+        images: &[ImageContent],
+        cancel: &CancelToken,
+        emit: &mut F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(AgentSessionEvent),
+    {
+        self.runtime
+            .run_prompt_events_with_images_cancellable(prompt, images, cancel, emit)
     }
 
     pub fn subscribe_to_agent_session(
@@ -261,6 +328,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let mut host = AppRuntimeHost::new(options.clone()).unwrap();
         let first_session = host.session_id().to_string();
@@ -280,6 +348,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let mut host = AppRuntimeHost::new(options).unwrap();
         let first_session = host.session_id().to_string();
@@ -298,6 +367,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let mut host = AppRuntimeHost::new(options).unwrap();
         let first_session_path = host.session_path();
@@ -320,6 +390,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let session =
             Session::create_default_with_cwd(options.config_path.as_deref(), &project_dir).unwrap();
@@ -346,6 +417,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let session =
             Session::create_default_with_cwd(options.config_path.as_deref(), &project_dir).unwrap();
@@ -373,6 +445,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let session =
             Session::create_default_with_cwd(options.config_path.as_deref(), &project_dir).unwrap();
@@ -395,6 +468,7 @@ mod tests {
 
         let options = RuntimeOptions {
             config_path: Some(dir.display().to_string()),
+            ..RuntimeOptions::default()
         };
         let mut host = AppRuntimeHost::new(options).unwrap();
         let observed = Arc::new(Mutex::new(Vec::new()));

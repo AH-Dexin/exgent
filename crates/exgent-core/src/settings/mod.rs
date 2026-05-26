@@ -91,6 +91,14 @@ impl SettingsStore {
         self.settings.theme = theme;
     }
 
+    pub fn keybindings(&self) -> &KeyBindings {
+        &self.settings.keybindings
+    }
+
+    pub fn set_keybindings(&mut self, keybindings: KeyBindings) {
+        self.settings.keybindings = keybindings;
+    }
+
     pub fn save(&self) -> io::Result<()> {
         write_json_pretty(&self.path, &self.settings)
     }
@@ -113,6 +121,8 @@ struct SettingsFile {
     locale: String,
     #[serde(default)]
     theme: ThemeSettings,
+    #[serde(default)]
+    keybindings: KeyBindings,
 }
 
 fn default_locale() -> String {
@@ -127,8 +137,95 @@ impl Default for SettingsFile {
             prompt_display_enabled: false,
             locale: default_locale(),
             theme: ThemeSettings::default(),
+            keybindings: KeyBindings::default(),
         }
     }
+}
+
+/// Editor- and app-level key bindings. Each action maps to a list of stroke
+/// strings such as `"ctrl+c"` or `"esc"`. The TUI matches against these at
+/// runtime so any binding can be overridden via `settings.json`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KeyBindings {
+    #[serde(default = "default_submit_binding")]
+    pub submit: Vec<String>,
+    #[serde(default = "default_cancel_binding")]
+    pub cancel: Vec<String>,
+    #[serde(default = "default_interrupt_binding")]
+    pub interrupt: Vec<String>,
+    #[serde(default = "default_quit_binding")]
+    pub quit: Vec<String>,
+    #[serde(default = "default_history_up_binding")]
+    pub history_up: Vec<String>,
+    #[serde(default = "default_history_down_binding")]
+    pub history_down: Vec<String>,
+    #[serde(default = "default_newline_binding")]
+    pub newline: Vec<String>,
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        Self {
+            submit: default_submit_binding(),
+            cancel: default_cancel_binding(),
+            interrupt: default_interrupt_binding(),
+            quit: default_quit_binding(),
+            history_up: default_history_up_binding(),
+            history_down: default_history_down_binding(),
+            newline: default_newline_binding(),
+        }
+    }
+}
+
+impl KeyBindings {
+    /// Match a stroke (e.g. `"ctrl+c"`) against an action's bindings.
+    pub fn matches(&self, action: KeyAction, stroke: &str) -> bool {
+        let bindings = match action {
+            KeyAction::Submit => &self.submit,
+            KeyAction::Cancel => &self.cancel,
+            KeyAction::Interrupt => &self.interrupt,
+            KeyAction::Quit => &self.quit,
+            KeyAction::HistoryUp => &self.history_up,
+            KeyAction::HistoryDown => &self.history_down,
+            KeyAction::Newline => &self.newline,
+        };
+        bindings
+            .iter()
+            .any(|binding| binding.eq_ignore_ascii_case(stroke))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KeyAction {
+    Submit,
+    Cancel,
+    Interrupt,
+    Quit,
+    HistoryUp,
+    HistoryDown,
+    Newline,
+}
+
+fn default_submit_binding() -> Vec<String> {
+    vec!["enter".to_string()]
+}
+fn default_cancel_binding() -> Vec<String> {
+    vec!["esc".to_string()]
+}
+fn default_interrupt_binding() -> Vec<String> {
+    vec!["ctrl+c".to_string()]
+}
+fn default_quit_binding() -> Vec<String> {
+    vec!["ctrl+d".to_string()]
+}
+fn default_history_up_binding() -> Vec<String> {
+    vec!["up".to_string()]
+}
+fn default_history_down_binding() -> Vec<String> {
+    vec!["down".to_string()]
+}
+fn default_newline_binding() -> Vec<String> {
+    vec!["shift+enter".to_string(), "alt+enter".to_string()]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -255,6 +352,36 @@ mod tests {
             })
         );
         assert!(loaded.path().ends_with("settings.json"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn defaults_keybindings_to_known_actions() {
+        let bindings = KeyBindings::default();
+        assert!(bindings.matches(KeyAction::Cancel, "esc"));
+        assert!(bindings.matches(KeyAction::Cancel, "Esc"));
+        assert!(bindings.matches(KeyAction::Interrupt, "ctrl+c"));
+        assert!(bindings.matches(KeyAction::Newline, "shift+enter"));
+        assert!(!bindings.matches(KeyAction::Quit, "esc"));
+    }
+
+    #[test]
+    fn keybindings_round_trip_through_settings() {
+        let dir = test_dir("keybindings_round_trip_through_settings");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut settings = SettingsStore::load(Some(dir.to_str().unwrap())).unwrap();
+        let overridden = KeyBindings {
+            submit: vec!["ctrl+m".to_string()],
+            ..KeyBindings::default()
+        };
+        settings.set_keybindings(overridden);
+        settings.save().unwrap();
+
+        let loaded = SettingsStore::load(Some(dir.to_str().unwrap())).unwrap();
+        assert!(loaded.keybindings().matches(KeyAction::Submit, "ctrl+m"));
+        assert!(!loaded.keybindings().matches(KeyAction::Submit, "enter"));
 
         let _ = fs::remove_dir_all(&dir);
     }

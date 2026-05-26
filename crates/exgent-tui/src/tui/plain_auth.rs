@@ -402,7 +402,7 @@ fn open_api_key_auth_menu(runtime: &mut TuiRuntime) -> io::Result<()> {
         println!("invalid provider selection");
         return Ok(());
     };
-    configure_api_key_provider(runtime, &selected.provider)?;
+    configure_api_key_provider(runtime, &selected.provider, selected.base_url.as_deref())?;
     refresh_active_footer(runtime);
 
     Ok(())
@@ -432,11 +432,16 @@ fn open_api_key_auth_menu_line(providers: &[AuthProviderInfo]) -> io::Result<Opt
     }
 }
 
-fn configure_api_key_provider(runtime: &mut TuiRuntime, provider: &str) -> io::Result<()> {
+fn configure_api_key_provider(
+    runtime: &mut TuiRuntime,
+    provider: &str,
+    base_url: Option<&str>,
+) -> io::Result<()> {
     refresh_active_footer(runtime);
-    println!("enter token for {provider}.");
-    println!("leave blank to remove the stored token.");
-    let Some(line) = read_cancelable_line("token: ")? else {
+    println!("provider: {provider}");
+    println!("url: {}", base_url.unwrap_or("-"));
+    println!("type or paste API_KEY (leave blank to remove the stored token).");
+    let Some(line) = read_cancelable_line("API_KEY: ")? else {
         println!("auth configuration cancelled");
         return Ok(());
     };

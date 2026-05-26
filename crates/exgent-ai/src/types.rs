@@ -104,10 +104,28 @@ pub enum MessageRole {
     System,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ImageContent {
+    pub data: String,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+}
+
+impl ImageContent {
+    pub fn new(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self {
+            data: data.into(),
+            mime_type: mime_type.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatMessage {
     pub role: MessageRole,
     pub content: String,
+    pub reasoning: Option<String>,
+    pub images: Vec<ImageContent>,
     pub tool_calls: Vec<ToolCall>,
     pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
@@ -119,6 +137,8 @@ impl ChatMessage {
         Self {
             role,
             content: content.into(),
+            reasoning: None,
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
             tool_name: None,
@@ -130,8 +150,31 @@ impl ChatMessage {
         Self::new(MessageRole::User, content)
     }
 
+    pub fn user_with_images(content: impl Into<String>, images: Vec<ImageContent>) -> Self {
+        let mut message = Self::user(content);
+        message.images = images;
+        message
+    }
+
+    pub fn with_images(mut self, images: Vec<ImageContent>) -> Self {
+        self.images = images;
+        self
+    }
+
+    pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
+        self.reasoning = Some(reasoning.into());
+        self
+    }
+
     pub fn assistant(content: impl Into<String>) -> Self {
         Self::new(MessageRole::Assistant, content)
+    }
+
+    pub fn assistant_with_reasoning(
+        content: impl Into<String>,
+        reasoning: impl Into<String>,
+    ) -> Self {
+        Self::assistant(content).with_reasoning(reasoning)
     }
 
     pub fn assistant_tool_call(call: ToolCall) -> Self {
@@ -281,9 +324,19 @@ pub enum ProviderEvent {
 pub trait ProviderAdapter {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent));
 
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        let _ = should_cancel;
+        self.stream_events(request, emit);
+    }
+
     fn stream(&self, request: ProviderRequest) -> Vec<ProviderEvent> {
         let mut events = Vec::new();
-        self.stream_events(request, &mut |event| events.push(event));
+        self.stream_events_cancellable(request, &|| false, &mut |event| events.push(event));
         events
     }
 }

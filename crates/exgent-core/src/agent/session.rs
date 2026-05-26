@@ -1,8 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use exgent_ai::{ChatMessage, DynamicProvider, Model, TokenUsage, ToolCall};
+use std::sync::Arc;
+
+use exgent_ai::{
+    ChatMessage, DynamicProvider, ImageContent, Model, TokenUsage, ToolCall, ToolDefinition,
+};
 
 use crate::{
+    cancel::CancelToken,
     config::RuntimeOptions,
     model_service::no_model_configured_message,
     session::{MessagePreview, SessionInfo, SessionService},
@@ -10,12 +15,15 @@ use crate::{
     tools::ToolRegistry,
 };
 
-use super::{Agent, AgentEvent, NoTools};
+use super::{
+    Agent, AgentEvent, NoHooks, NoTools, SharedAgentHooks, ToolExecutionResult, ToolExecutor,
+};
 
 pub struct AgentSession {
     agent: Option<Agent<DynamicProvider>>,
     session_service: SessionService,
     tools: ToolRegistry,
+    hooks: SharedAgentHooks,
     project_dir: PathBuf,
     usage_totals: UsageTotals,
     listeners: Vec<AgentSessionEventListener>,
@@ -24,9 +32,13 @@ pub struct AgentSession {
 
 #[derive(Clone, Debug, PartialEq)]
 enum TurnSessionRecord {
-    Assistant(String),
+    Assistant {
+        content: String,
+        reasoning: Option<String>,
+    },
     AssistantToolCalls {
         content: String,
+        reasoning: Option<String>,
         calls: Vec<ToolCall>,
     },
     ToolResult {
@@ -54,6 +66,23 @@ pub enum AgentSessionEvent {
     CompactionFinished { compacted_count: usize },
     UsageUpdated(UsageTotals),
     TurnCommitted { message_count: usize },
+    TurnTelemetry(TurnTelemetry),
+}
+
+/// Per-turn timing and counters reported after each `run_prompt_events` call.
+///
+/// Subscribers can use this to populate dashboards or annotate session logs.
+/// Token figures match the `UsageTotals` delta for this turn.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TurnTelemetry {
+    pub duration_ms: u128,
+    pub tool_calls: usize,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub cost: f64,
+    pub errored: bool,
 }
 
 struct AgentSessionEventListener {
@@ -105,6 +134,7 @@ impl AgentSession {
             agent,
             session_service,
             tools: ToolRegistry::default_builtin_in(project_dir.clone()),
+            hooks: Arc::new(NoHooks),
             project_dir,
             usage_totals,
             listeners: Vec::new(),
@@ -114,6 +144,15 @@ impl AgentSession {
 
     pub fn set_agent(&mut self, agent: Option<Agent<DynamicProvider>>) {
         self.agent = agent;
+    }
+
+    pub fn set_hooks(&mut self, hooks: SharedAgentHooks) {
+        self.hooks = hooks;
+    }
+
+    #[allow(dead_code)]
+    pub fn hooks(&self) -> &SharedAgentHooks {
+        &self.hooks
     }
 
     pub fn usage_totals(&self) -> &UsageTotals {
@@ -205,7 +244,25 @@ impl AgentSession {
         self.session_service.list_sessions()
     }
 
-    pub fn run_prompt_events<F>(&mut self, prompt: &str, emit: &mut F) -> Result<(), String>
+    pub fn run_prompt_events_cancellable<F>(
+        &mut self,
+        prompt: &str,
+        cancel: &CancelToken,
+        emit: &mut F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(AgentSessionEvent),
+    {
+        self.run_prompt_events_with_images_cancellable(prompt, &[], cancel, emit)
+    }
+
+    pub fn run_prompt_events_with_images_cancellable<F>(
+        &mut self,
+        prompt: &str,
+        images: &[ImageContent],
+        cancel: &CancelToken,
+        emit: &mut F,
+    ) -> Result<(), String>
     where
         F: FnMut(AgentSessionEvent),
     {
@@ -231,22 +288,49 @@ impl AgentSession {
             self.emit_event(AgentSessionEvent::Agent(AgentEvent::AgentEnd), emit);
             return Ok(());
         };
+        if !images.is_empty() && !model_supports_images(agent.model()) {
+            return Err(format!(
+                "selected model {}/{} does not declare image input support",
+                agent.model().provider,
+                agent.model().id
+            ));
+        }
         let agent = agent.clone();
-        let tools = self.tools.clone();
+        let inner_tools = self.tools.clone().with_cancel(cancel.clone());
+        let tools = HookedTools {
+            inner: inner_tools,
+            hooks: Arc::clone(&self.hooks),
+        };
 
         let mut messages = vec![ChatMessage::system(self.system_prompt())];
         messages.extend(self.session_service.chat_messages());
-        messages.push(ChatMessage::user(prompt));
+        messages.push(ChatMessage::user_with_images(prompt, images.to_vec()));
+        if let Some(rewritten) = self.hooks.transform_messages(&messages) {
+            messages = rewritten;
+        }
 
         let mut session_records = Vec::new();
+        let mut current_reasoning = String::new();
         let mut errors = Vec::new();
         let mut turn_usage = UsageTotals::default();
-        agent.run_messages_with_tools_streaming(messages, &tools, &mut |event| {
+        let mut tool_call_count = 0usize;
+        let turn_started_at = std::time::Instant::now();
+        agent.run_messages_with_tools_streaming(messages, &tools, cancel, &mut |event| {
             match &event {
+                AgentEvent::MessageStart { .. } => {
+                    current_reasoning.clear();
+                }
+                AgentEvent::ReasoningDelta { delta } => {
+                    current_reasoning.push_str(delta);
+                }
                 AgentEvent::MessageEnd { content } => {
-                    session_records.push(TurnSessionRecord::Assistant(content.clone()));
+                    session_records.push(TurnSessionRecord::Assistant {
+                        content: content.clone(),
+                        reasoning: non_empty_reasoning(&current_reasoning),
+                    });
                 }
                 AgentEvent::AssistantToolCalls { calls } => {
+                    tool_call_count += calls.len();
                     push_tool_call_turn_record(&mut session_records, calls.clone());
                 }
                 AgentEvent::ToolCallStart { .. } => {}
@@ -282,7 +366,12 @@ impl AgentSession {
             session_records.push(TurnSessionRecord::Error(message.clone()));
         }
 
-        self.session_service.append_user(prompt)?;
+        if images.is_empty() {
+            self.session_service.append_user(prompt)?;
+        } else {
+            self.session_service
+                .append_user_with_images(prompt, images.to_vec())?;
+        }
         self.commit_session_records(session_records, turn_usage.to_usage())?;
         self.usage_totals.add_totals(&turn_usage);
         self.emit_event(
@@ -293,6 +382,19 @@ impl AgentSession {
             AgentSessionEvent::TurnCommitted {
                 message_count: self.session_service.message_count(),
             },
+            emit,
+        );
+        self.emit_event(
+            AgentSessionEvent::TurnTelemetry(TurnTelemetry {
+                duration_ms: turn_started_at.elapsed().as_millis(),
+                tool_calls: tool_call_count,
+                input_tokens: turn_usage.input,
+                output_tokens: turn_usage.output,
+                cache_read_tokens: turn_usage.cache_read,
+                cache_write_tokens: turn_usage.cache_write,
+                cost: turn_usage.cost,
+                errored: error.is_some(),
+            }),
             emit,
         );
 
@@ -310,23 +412,49 @@ impl AgentSession {
         let last_assistant_index = session_records.iter().rposition(|record| {
             matches!(
                 record,
-                TurnSessionRecord::Assistant(_) | TurnSessionRecord::AssistantToolCalls { .. }
+                TurnSessionRecord::Assistant { .. } | TurnSessionRecord::AssistantToolCalls { .. }
             )
         });
         for (index, record) in session_records.into_iter().enumerate() {
             match record {
-                TurnSessionRecord::Assistant(content) => {
+                TurnSessionRecord::Assistant { content, reasoning } => {
                     if Some(index) == last_assistant_index {
+                        if let Some(reasoning) = reasoning {
+                            self.session_service
+                                .append_assistant_with_reasoning_and_usage(
+                                    content,
+                                    Some(reasoning),
+                                    usage.clone(),
+                                )?;
+                        } else {
+                            self.session_service
+                                .append_assistant_with_usage(content, usage.clone())?;
+                        }
+                    } else if let Some(reasoning) = reasoning {
                         self.session_service
-                            .append_assistant_with_usage(content, usage.clone())?;
+                            .append_assistant_with_reasoning(content, Some(reasoning))?;
                     } else {
                         self.session_service.append_assistant(content)?;
                     }
                 }
-                TurnSessionRecord::AssistantToolCalls { content, calls } => {
+                TurnSessionRecord::AssistantToolCalls {
+                    content,
+                    reasoning,
+                    calls,
+                } => {
                     let usage = (Some(index) == last_assistant_index).then(|| usage.clone());
-                    self.session_service
-                        .append_assistant_tool_calls(content, calls, usage)?;
+                    if let Some(reasoning) = reasoning {
+                        self.session_service
+                            .append_assistant_tool_calls_with_reasoning(
+                                content,
+                                Some(reasoning),
+                                calls,
+                                usage,
+                            )?;
+                    } else {
+                        self.session_service
+                            .append_assistant_tool_calls(content, calls, usage)?;
+                    }
                 }
                 TurnSessionRecord::ToolResult {
                     id,
@@ -363,6 +491,40 @@ impl AgentSession {
     fn emit_to_listeners(&mut self, event: &AgentSessionEvent) {
         for listener in &mut self.listeners {
             (listener.callback)(event);
+        }
+    }
+}
+
+fn model_supports_images(model: &Model) -> bool {
+    model.input.is_empty() || model.input.iter().any(|input| input == "image")
+}
+
+struct HookedTools {
+    inner: ToolRegistry,
+    hooks: SharedAgentHooks,
+}
+
+impl ToolExecutor for HookedTools {
+    fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.inner.tool_definitions()
+    }
+
+    fn before_tool_call(&self, call: &ToolCall) -> Option<ToolExecutionResult> {
+        if let Some(result) = self.hooks.before_tool_call(call) {
+            return Some(result);
+        }
+        self.inner.before_tool_call(call)
+    }
+
+    fn execute_tool(&self, call: &ToolCall) -> ToolExecutionResult {
+        self.inner.execute_tool(call)
+    }
+
+    fn after_tool_call(&self, call: &ToolCall, result: ToolExecutionResult) -> ToolExecutionResult {
+        let result = self.inner.after_tool_call(call, result);
+        match self.hooks.after_tool_call(call, &result) {
+            Some(updated) => updated,
+            None => result,
         }
     }
 }
@@ -420,6 +582,9 @@ fn build_model_compaction_prompt(messages: &[ChatMessage]) -> String {
             prompt.push_str(": ");
             prompt.push_str(&message.content.replace('\n', " "));
         }
+        if !message.images.is_empty() {
+            prompt.push_str(&format!(" [{} image(s)]", message.images.len()));
+        }
         prompt.push('\n');
     }
     prompt
@@ -433,19 +598,29 @@ fn push_tool_call_turn_record(records: &mut Vec<TurnSessionRecord>, calls: Vec<T
         }) => {
             existing_calls.extend(calls);
         }
-        Some(TurnSessionRecord::Assistant(existing_content)) => {
+        Some(TurnSessionRecord::Assistant {
+            content: existing_content,
+            reasoning: existing_reasoning,
+        }) => {
             let existing_content = std::mem::take(existing_content);
+            let existing_reasoning = existing_reasoning.take();
             records.pop();
             records.push(TurnSessionRecord::AssistantToolCalls {
                 content: existing_content,
+                reasoning: existing_reasoning,
                 calls,
             });
         }
         _ => records.push(TurnSessionRecord::AssistantToolCalls {
             content: String::new(),
+            reasoning: None,
             calls,
         }),
     }
+}
+
+fn non_empty_reasoning(reasoning: &str) -> Option<String> {
+    (!reasoning.is_empty()).then(|| reasoning.to_string())
 }
 
 fn records_have_tool_results(records: &[TurnSessionRecord]) -> bool {

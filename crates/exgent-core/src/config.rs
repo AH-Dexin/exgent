@@ -3,6 +3,22 @@ use std::{env, path::PathBuf};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RuntimeOptions {
     pub config_path: Option<String>,
+    pub agent: AgentLoopConfig,
+    /// When true, the runtime enables the development-only `fake` provider
+    /// adapter. Intended for tests and local debugging; production builds
+    /// should leave this `false`.
+    pub enable_dev_providers: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AgentLoopConfig {
+    pub max_tool_rounds: usize,
+}
+
+impl Default for AgentLoopConfig {
+    fn default() -> Self {
+        Self { max_tool_rounds: 8 }
+    }
 }
 
 pub fn config_root(config_path: Option<&str>) -> PathBuf {

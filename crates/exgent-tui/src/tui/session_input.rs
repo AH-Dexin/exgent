@@ -28,6 +28,7 @@ pub(super) fn handle_session_picker_key(
                 match runtime.start_new_session() {
                     Ok(()) => {
                         app.transcript.clear();
+                        app.scroll_transcript_to_bottom();
                         app.refresh_status(runtime);
                         app.push_note(
                             tr(app.locale, MessageId::NewSessionCreated)
@@ -40,6 +41,7 @@ pub(super) fn handle_session_picker_key(
                 match runtime.open_session(&session.path) {
                     Ok(()) => {
                         app.transcript.clear();
+                        app.scroll_transcript_to_bottom();
                         app.refresh_status(runtime);
                         app.push_note(
                             tr(app.locale, MessageId::SessionLoaded)

@@ -8,15 +8,17 @@ use exgent_ai::{
     ToolExecutionMode,
 };
 
-use super::{AgentEvent, ToolExecutionResult, ToolExecutor};
+use crate::{cancel::CancelToken, config::AgentLoopConfig};
 
-const MAX_TOOL_ROUNDS: usize = 8;
+use super::{AgentEvent, ToolExecutionResult, ToolExecutor};
 
 pub(crate) fn run_messages_with_tools_streaming<P, T, F>(
     model: &Model,
     provider: &P,
     mut messages: Vec<ChatMessage>,
     tools: &T,
+    config: AgentLoopConfig,
+    cancel: &CancelToken,
     emit: &mut F,
 ) where
     P: ProviderAdapter,
@@ -25,7 +27,16 @@ pub(crate) fn run_messages_with_tools_streaming<P, T, F>(
 {
     emit(AgentEvent::AgentStart);
 
-    for _ in 0..MAX_TOOL_ROUNDS {
+    let max_rounds = config.max_tool_rounds.max(1);
+    for _ in 0..max_rounds {
+        if cancel.is_cancelled() {
+            emit(AgentEvent::Error {
+                message: "cancelled".to_string(),
+            });
+            emit(AgentEvent::AgentEnd);
+            return;
+        }
+
         let tool_definitions = tools.tool_definitions();
         let tool_modes = tool_definitions
             .iter()
@@ -37,7 +48,7 @@ pub(crate) fn run_messages_with_tools_streaming<P, T, F>(
             tools: tool_definitions,
         };
 
-        let turn = stream_assistant_turn(provider, request, emit);
+        let turn = stream_assistant_turn(provider, request, cancel, emit);
         if turn.failed {
             emit(AgentEvent::AgentEnd);
             return;
@@ -55,7 +66,15 @@ pub(crate) fn run_messages_with_tools_streaming<P, T, F>(
             return;
         }
 
-        let tool_results = execute_tool_batch(&turn.tool_calls, &tool_modes, tools, emit);
+        if cancel.is_cancelled() {
+            emit(AgentEvent::Error {
+                message: "cancelled".to_string(),
+            });
+            emit(AgentEvent::AgentEnd);
+            return;
+        }
+
+        let tool_results = execute_tool_batch(&turn.tool_calls, &tool_modes, tools, cancel, emit);
         messages.extend(
             tool_results
                 .into_iter()
@@ -74,6 +93,7 @@ pub(crate) fn run_messages_with_tools_streaming<P, T, F>(
 #[derive(Default)]
 struct AssistantTurn {
     content: String,
+    reasoning: String,
     tool_calls: Vec<ToolCall>,
     failed: bool,
 }
@@ -82,10 +102,12 @@ impl AssistantTurn {
     fn assistant_messages(&self) -> Vec<ChatMessage> {
         let mut messages = Vec::new();
         if !self.content.is_empty() || !self.tool_calls.is_empty() {
-            messages.push(ChatMessage::assistant_tool_calls(
-                self.content.clone(),
-                self.tool_calls.clone(),
-            ));
+            let mut message =
+                ChatMessage::assistant_tool_calls(self.content.clone(), self.tool_calls.clone());
+            if !self.reasoning.is_empty() {
+                message.reasoning = Some(self.reasoning.clone());
+            }
+            messages.push(message);
         }
         messages
     }
@@ -94,6 +116,7 @@ impl AssistantTurn {
 fn stream_assistant_turn<P, F>(
     provider: &P,
     request: ProviderRequest,
+    cancel: &CancelToken,
     emit: &mut F,
 ) -> AssistantTurn
 where
@@ -104,8 +127,16 @@ where
     let mut message_started = false;
     let mut message_ended = false;
 
-    provider.stream_events(request, &mut |event| {
+    provider.stream_events_cancellable(request, &|| cancel.is_cancelled(), &mut |event| {
         if turn.failed {
+            return;
+        }
+
+        if cancel.is_cancelled() {
+            turn.failed = true;
+            emit(AgentEvent::Error {
+                message: "cancelled".to_string(),
+            });
             return;
         }
 
@@ -121,6 +152,7 @@ where
                 emit(AgentEvent::MessageDelta { delta });
             }
             ProviderEvent::ReasoningDelta(delta) => {
+                turn.reasoning.push_str(&delta);
                 emit(AgentEvent::ReasoningDelta { delta });
             }
             ProviderEvent::Usage(usage) => {
@@ -173,6 +205,7 @@ fn execute_tool_batch<T, F>(
     calls: &[ToolCall],
     tool_modes: &BTreeMap<String, ToolExecutionMode>,
     tools: &T,
+    cancel: &CancelToken,
     emit: &mut F,
 ) -> Vec<ExecutedToolResult>
 where
@@ -186,7 +219,7 @@ where
     let prepared = calls
         .iter()
         .cloned()
-        .map(|call| prepare_tool_call(call, tools))
+        .map(|call| prepare_tool_call(call, tools, cancel))
         .collect::<Vec<_>>();
     let pending_calls = prepared
         .iter()
@@ -197,9 +230,9 @@ where
         .collect::<Vec<_>>();
 
     let pending_results = if should_execute_sequentially(&pending_calls, tool_modes) {
-        execute_pending_tools_sequentially(&pending_calls, tools)
+        execute_pending_tools_sequentially(&pending_calls, tools, cancel)
     } else {
-        execute_pending_tools_in_parallel(&pending_calls, tools)
+        execute_pending_tools_in_parallel(&pending_calls, tools, cancel)
     };
     let mut pending_results = VecDeque::from(pending_results);
     let results = prepared
@@ -229,10 +262,16 @@ enum PreparedToolCall {
     Pending(ToolCall),
 }
 
-fn prepare_tool_call<T>(call: ToolCall, tools: &T) -> PreparedToolCall
+fn prepare_tool_call<T>(call: ToolCall, tools: &T, cancel: &CancelToken) -> PreparedToolCall
 where
     T: ToolExecutor,
 {
+    if cancel.is_cancelled() {
+        return PreparedToolCall::Completed(ExecutedToolResult {
+            result: ToolExecutionResult::error("cancelled before tool execution"),
+            call,
+        });
+    }
     match tools.before_tool_call(&call) {
         Some(result) => PreparedToolCall::Completed(ExecutedToolResult {
             result: tools.after_tool_call(&call, result),
@@ -242,21 +281,36 @@ where
     }
 }
 
-fn execute_pending_tools_sequentially<T>(calls: &[ToolCall], tools: &T) -> Vec<ExecutedToolResult>
+fn execute_pending_tools_sequentially<T>(
+    calls: &[ToolCall],
+    tools: &T,
+    cancel: &CancelToken,
+) -> Vec<ExecutedToolResult>
 where
     T: ToolExecutor,
 {
     calls
         .iter()
         .cloned()
-        .map(|call| ExecutedToolResult {
-            result: execute_prepared_tool(&call, tools),
-            call,
+        .map(|call| {
+            if cancel.is_cancelled() {
+                let result = tools.after_tool_call(&call, ToolExecutionResult::error("cancelled"));
+                ExecutedToolResult { call, result }
+            } else {
+                ExecutedToolResult {
+                    result: execute_prepared_tool(&call, tools),
+                    call,
+                }
+            }
         })
         .collect()
 }
 
-fn execute_pending_tools_in_parallel<T>(calls: &[ToolCall], tools: &T) -> Vec<ExecutedToolResult>
+fn execute_pending_tools_in_parallel<T>(
+    calls: &[ToolCall],
+    tools: &T,
+    cancel: &CancelToken,
+) -> Vec<ExecutedToolResult>
 where
     T: ToolExecutor,
 {
@@ -266,9 +320,17 @@ where
             .cloned()
             .map(|call| {
                 let fallback_call = call.clone();
-                let handle = scope.spawn(move || ExecutedToolResult {
-                    result: execute_prepared_tool(&call, tools),
-                    call,
+                let cancel = cancel.clone();
+                let handle = scope.spawn(move || {
+                    if cancel.is_cancelled() {
+                        let result =
+                            tools.after_tool_call(&call, ToolExecutionResult::error("cancelled"));
+                        return ExecutedToolResult { call, result };
+                    }
+                    ExecutedToolResult {
+                        result: execute_prepared_tool(&call, tools),
+                        call,
+                    }
                 });
                 (fallback_call, handle)
             })

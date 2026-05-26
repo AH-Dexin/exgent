@@ -169,6 +169,17 @@ impl PrintRenderer {
                 "type": "turn_committed",
                 "message_count": message_count,
             }),
+            AgentSessionEvent::TurnTelemetry(telemetry) => serde_json::json!({
+                "type": "turn_telemetry",
+                "duration_ms": telemetry.duration_ms,
+                "tool_calls": telemetry.tool_calls,
+                "input_tokens": telemetry.input_tokens,
+                "output_tokens": telemetry.output_tokens,
+                "cache_read_tokens": telemetry.cache_read_tokens,
+                "cache_write_tokens": telemetry.cache_write_tokens,
+                "cost": telemetry.cost,
+                "errored": telemetry.errored,
+            }),
         };
         println!("{value}");
         self.wrote_output = true;

@@ -1,28 +1,42 @@
 use std::{
     env, io,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
+    thread,
+    time::Duration,
 };
 
 use exgent_ai::ToolCall;
 
 use super::{arguments::required_argument, ToolOutput};
+use crate::cancel::CancelToken;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct BashArgs {
     pub command: String,
 }
 
-pub(super) fn execute_bash_call(call: &ToolCall, project_dir: &Path) -> io::Result<ToolOutput> {
+pub(super) fn execute_bash_call(
+    call: &ToolCall,
+    project_dir: &Path,
+    cancel: &CancelToken,
+) -> io::Result<ToolOutput> {
     bash(
         BashArgs {
             command: required_argument(call, "command")?.to_string(),
         },
         project_dir,
+        cancel,
     )
 }
 
-pub(super) fn bash(args: BashArgs, project_dir: &Path) -> io::Result<ToolOutput> {
+pub(super) fn bash(
+    args: BashArgs,
+    project_dir: &Path,
+    cancel: &CancelToken,
+) -> io::Result<ToolOutput> {
     if args.command.trim().is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -31,16 +45,90 @@ pub(super) fn bash(args: BashArgs, project_dir: &Path) -> io::Result<ToolOutput>
     }
 
     let shell = resolve_shell()?;
-    let output = Command::new(&shell.program)
+    let mut command = Command::new(&shell.program);
+    command
         .args(shell.args(&args.command))
         .current_dir(project_dir)
-        .output()?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    spawn_in_new_process_group(&mut command);
+    let mut child = command.spawn()?;
+    let child_pid = child.id();
+
+    let cancelled = loop {
+        if cancel.is_cancelled() {
+            break true;
+        }
+        match child.try_wait()? {
+            Some(_status) => break false,
+            None => thread::sleep(POLL_INTERVAL),
+        }
+    };
+
+    if cancelled {
+        kill_process_group(child_pid);
+        let _ = child.kill();
+    }
+
+    let output = child.wait_with_output()?;
+
+    if cancelled {
+        return Ok(ToolOutput {
+            tool_name: "bash".to_string(),
+            content: format!(
+                "{}\n[cancelled]",
+                format_command_output(output).trim_end_matches('\n')
+            ),
+        });
+    }
 
     Ok(ToolOutput {
         tool_name: "bash".to_string(),
         content: format_command_output(output),
     })
 }
+
+#[cfg(unix)]
+fn spawn_in_new_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // Put the child in its own process group so we can SIGKILL the whole
+    // tree (e.g. bash → sleep) on cancellation. `setsid` returns -1 on
+    // error; we don't propagate it because failing to detach is not fatal.
+    unsafe {
+        command.pre_exec(|| {
+            libc_setsid();
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn spawn_in_new_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn libc_setsid() {
+    extern "C" {
+        fn setsid() -> i32;
+    }
+    unsafe {
+        setsid();
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    const SIGKILL: i32 = 9;
+    // Negative pid targets the process group whose leader has that pid.
+    unsafe {
+        kill(-(pid as i32), SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ResolvedShell {
@@ -177,6 +265,7 @@ mod tests {
                 command: "  ".to_string(),
             },
             &env::temp_dir(),
+            &CancelToken::new(),
         )
         .unwrap_err();
 
@@ -194,11 +283,38 @@ mod tests {
                 command: "printf exgent".to_string(),
             },
             &env::current_dir().unwrap(),
+            &CancelToken::new(),
         )
         .unwrap();
 
         assert_eq!(output.tool_name, "bash");
         assert!(output.content.contains("exgent"));
         assert!(output.content.contains("exit_code: 0"));
+    }
+
+    #[test]
+    fn bash_cancel_kills_long_running_command() {
+        if cfg!(windows) || resolve_shell().is_err() {
+            return;
+        }
+
+        let cancel = CancelToken::new();
+        let signal = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            signal.cancel();
+        });
+
+        let output = bash(
+            BashArgs {
+                command: "sleep 30; echo finished".to_string(),
+            },
+            &env::current_dir().unwrap(),
+            &cancel,
+        )
+        .unwrap();
+
+        assert!(output.content.contains("[cancelled]"));
+        assert!(!output.content.contains("finished"));
     }
 }

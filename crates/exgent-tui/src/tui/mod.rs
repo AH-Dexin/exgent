@@ -6,6 +6,7 @@ mod actions;
 mod app;
 mod auth_flow;
 mod auth_input;
+mod clipboard_image;
 mod composer_input;
 mod formatting;
 mod forms;

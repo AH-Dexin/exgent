@@ -16,7 +16,16 @@ pub struct OpenAiResponsesProvider;
 
 impl ProviderAdapter for OpenAiResponsesProvider {
     fn stream_events(&self, request: ProviderRequest, emit: &mut dyn FnMut(ProviderEvent)) {
-        if let Err(error) = openai_responses_stream(request, emit) {
+        self.stream_events_cancellable(request, &|| false, emit);
+    }
+
+    fn stream_events_cancellable(
+        &self,
+        request: ProviderRequest,
+        should_cancel: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(ProviderEvent),
+    ) {
+        if let Err(error) = openai_responses_stream(request, should_cancel, emit) {
             emit(ProviderEvent::Error(error.to_string()));
         }
     }
@@ -100,8 +109,13 @@ impl From<OpenAiResponsesUsage> for TokenUsage {
 
 fn openai_responses_stream(
     request: ProviderRequest,
+    should_cancel: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(ProviderEvent),
 ) -> Result<(), ProviderError> {
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
+
     let base_url = request
         .model
         .base_url
@@ -119,12 +133,15 @@ fn openai_responses_stream(
         tool_choice,
     };
 
-    let request_builder = reqwest::blocking::Client::new()
+    let request_builder = crate::shared_blocking_client()
         .post(url)
         .bearer_auth(api_key)
         .header(reqwest::header::ACCEPT, "text/event-stream");
     let request_builder = apply_model_headers(request_builder, &request.model, &request.messages);
 
+    if should_cancel() {
+        return Err(ProviderError::new("cancelled"));
+    }
     let response = request_builder
         .json(&body)
         .send()
@@ -143,13 +160,21 @@ fn openai_responses_stream(
     let model = request.model;
     let mut content = String::new();
     let mut usage = TokenUsage::default();
-    let reader = BufReader::new(response);
+    let mut lines = BufReader::new(response).lines();
     emit(ProviderEvent::Start);
 
-    for line in reader.lines() {
+    while let Some(line) = {
+        if should_cancel() {
+            return Err(ProviderError::new("cancelled"));
+        }
+        lines.next()
+    } {
         let line =
             line.map_err(|error| ProviderError::new(format!("stream read failed: {error}")))?;
         for delta in parse_openai_responses_stream_line(&line)? {
+            if should_cancel() {
+                return Err(ProviderError::new("cancelled"));
+            }
             match delta {
                 StreamDelta::Text(delta) => {
                     content.push_str(&delta);

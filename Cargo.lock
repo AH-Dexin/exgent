@@ -327,12 +327,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
 ]
 
 [[package]]
 name = "exgent-tui"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "crossterm",
  "exgent-core",
  "open",
