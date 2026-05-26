@@ -1,0 +1,16 @@
+[package]
+name = "exgent-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crossterm = "0.29.0"
+exgent-core = { path = "../exgent-core" }
+open = "5"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+unicode-width = "0.2"
+
+[lib]
+path = "src/lib.rs"

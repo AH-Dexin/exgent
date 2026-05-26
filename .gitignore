@@ -1,1 +1,16 @@
-target
+/target/
+/.rustc_info.json
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local config and credentials
+.env
+.env.*
+
+# Test and temp output
+*.tmp
+*.log
