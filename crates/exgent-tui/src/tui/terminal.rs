@@ -5,10 +5,7 @@ use std::{
 
 use crossterm::{
     cursor,
-    event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event,
-    },
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,7 +20,6 @@ pub(super) fn enter_terminal() -> io::Result<TuiTerminal> {
         stdout,
         EnterAlternateScreen,
         EnableBracketedPaste,
-        EnableMouseCapture,
         cursor::Hide
     )?;
     let backend = CrosstermBackend::new(stdout);
@@ -41,7 +37,6 @@ impl Drop for TerminalRestoreGuard {
         let _ = execute!(
             stdout,
             cursor::Show,
-            DisableMouseCapture,
             DisableBracketedPaste,
             LeaveAlternateScreen
         );

@@ -227,7 +227,7 @@ fn submit_input(
             Some(AppCommand::DebugEnable) => {
                 app.composer.clear();
                 match runtime.set_prompt_display_enabled(true) {
-                    Ok(()) => app.push_note(tr(app.locale, MessageId::DebugDisplayEnabled)),
+                    Ok(()) => app.push_note(tr(app.locale, MessageId::DebugPromptEnabled)),
                     Err(error) => app.push_error(error),
                 }
                 app.refresh_status(runtime);
@@ -236,7 +236,7 @@ fn submit_input(
             Some(AppCommand::DebugDisable) => {
                 app.composer.clear();
                 match runtime.set_prompt_display_enabled(false) {
-                    Ok(()) => app.push_note(tr(app.locale, MessageId::DebugDisplayDisabled)),
+                    Ok(()) => app.push_note(tr(app.locale, MessageId::DebugPromptDisabled)),
                     Err(error) => app.push_error(error),
                 }
                 app.refresh_status(runtime);

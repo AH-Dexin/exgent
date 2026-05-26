@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use exgent_core::{
     tr, AgentEvent, AgentSessionEvent, AppRuntimeHost, CancelToken, ImageContent, MessageId,
 };
@@ -31,6 +31,9 @@ pub(super) fn run_prompt(
 ) -> io::Result<()> {
     app.is_running = true;
     app.scroll_transcript_to_bottom();
+    if runtime.prompt_display_enabled() {
+        app.push_system_prompt(runtime.system_prompt());
+    }
     if images.is_empty() {
         app.push_user(prompt.clone());
     } else {
@@ -111,6 +114,16 @@ impl PromptInputWatcher {
                                 let _ = tx.send(PromptInputEvent::Cancel);
                             } else {
                                 match key.code {
+                                    KeyCode::Up if key.modifiers.is_empty() => {
+                                        let _ = tx.send(PromptInputEvent::ScrollUp(
+                                            TRANSCRIPT_SCROLL_LINES,
+                                        ));
+                                    }
+                                    KeyCode::Down if key.modifiers.is_empty() => {
+                                        let _ = tx.send(PromptInputEvent::ScrollDown(
+                                            TRANSCRIPT_SCROLL_LINES,
+                                        ));
+                                    }
                                     KeyCode::PageUp => {
                                         let _ = tx.send(PromptInputEvent::ScrollUp(10));
                                     }
@@ -131,17 +144,6 @@ impl PromptInputWatcher {
                                 }
                             }
                         }
-                        Ok(Event::Mouse(mouse)) => match mouse.kind {
-                            MouseEventKind::ScrollUp => {
-                                let _ =
-                                    tx.send(PromptInputEvent::ScrollUp(TRANSCRIPT_SCROLL_LINES));
-                            }
-                            MouseEventKind::ScrollDown => {
-                                let _ =
-                                    tx.send(PromptInputEvent::ScrollDown(TRANSCRIPT_SCROLL_LINES));
-                            }
-                            _ => {}
-                        },
                         Ok(_) => {}
                         Err(_) => break,
                     },

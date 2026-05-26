@@ -79,9 +79,12 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
             continue;
         }
 
-        let show_prompt_details = runtime.prompt_display_enabled();
+        let show_system_prompt = runtime.prompt_display_enabled();
+        if show_system_prompt {
+            print_prompt_preview(runtime)?;
+        }
         let mut renderer = EventRenderer::new(
-            show_prompt_details,
+            true,
             io::stdin().is_terminal() && io::stdout().is_terminal(),
         );
         let spinner_footer = (io::stdin().is_terminal() && io::stdout().is_terminal())
@@ -93,7 +96,7 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
                 if matches!(&event, AgentEvent::Error { .. }) {
                     streaming_error = true;
                 }
-                if event_has_visible_output(&event, show_prompt_details) {
+                if event_has_visible_output(&event, true) {
                     spinner.stop();
                 }
                 renderer.render(event);
@@ -582,14 +585,14 @@ fn handle_command(runtime: &mut TuiRuntime, input: &str) -> io::Result<bool> {
         }
         Some(AppCommand::DebugEnable) => {
             match runtime.set_prompt_display_enabled(true) {
-                Ok(()) => println!("debug display: enabled"),
+                Ok(()) => println!("debug prompt: enabled"),
                 Err(error) => eprintln!("error: {error}"),
             }
             Ok(true)
         }
         Some(AppCommand::DebugDisable) => {
             match runtime.set_prompt_display_enabled(false) {
-                Ok(()) => println!("debug display: disabled"),
+                Ok(()) => println!("debug prompt: disabled"),
                 Err(error) => eprintln!("error: {error}"),
             }
             Ok(true)

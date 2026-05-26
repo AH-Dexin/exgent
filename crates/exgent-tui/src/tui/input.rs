@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use exgent_core::AppRuntimeHost;
 
 use super::auth_input::{
@@ -67,24 +67,28 @@ pub(super) fn handle_key(app: &mut TuiApp, runtime: &mut TuiRuntime, key: KeyEve
     }
 }
 
-pub(super) fn handle_mouse(app: &mut TuiApp, mouse: MouseEvent) {
-    if !transcript_scroll_enabled(app) {
-        return;
-    }
-
-    match mouse.kind {
-        MouseEventKind::ScrollUp => app.scroll_transcript_up(TRANSCRIPT_SCROLL_LINES),
-        MouseEventKind::ScrollDown => app.scroll_transcript_down(TRANSCRIPT_SCROLL_LINES),
-        _ => {}
-    }
-}
-
 fn transcript_scroll_enabled(app: &TuiApp) -> bool {
     matches!(app.overlay, Overlay::None | Overlay::SlashMenu { .. })
 }
 
 fn handle_transcript_scroll_key(app: &mut TuiApp, key: KeyEvent) -> bool {
     match key.code {
+        KeyCode::Up
+            if key.modifiers.is_empty()
+                && app.composer.is_empty()
+                && matches!(app.overlay, Overlay::None) =>
+        {
+            app.scroll_transcript_up(TRANSCRIPT_SCROLL_LINES);
+            true
+        }
+        KeyCode::Down
+            if key.modifiers.is_empty()
+                && app.composer.is_empty()
+                && matches!(app.overlay, Overlay::None) =>
+        {
+            app.scroll_transcript_down(TRANSCRIPT_SCROLL_LINES);
+            true
+        }
         KeyCode::PageUp => {
             app.scroll_transcript_up(10);
             true

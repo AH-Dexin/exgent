@@ -43,7 +43,7 @@ impl TuiApp {
             model_reasoning: false,
             is_running: false,
             runtime_activity: None,
-            show_reasoning: runtime.prompt_display_enabled(),
+            show_reasoning: true,
             locale: runtime.locale(),
             theme: runtime.theme(),
             theme_preview: None,
@@ -56,7 +56,7 @@ impl TuiApp {
         self.model_label = runtime.model_label();
         self.session_id = runtime.session_id().to_string();
         self.usage = runtime.usage_totals().clone();
-        self.show_reasoning = runtime.prompt_display_enabled();
+        self.show_reasoning = true;
         self.locale = runtime.locale();
         self.theme = runtime.theme();
         self.cwd = project_dir_label(runtime);
@@ -71,6 +71,13 @@ impl TuiApp {
 
     pub(super) fn push_note(&mut self, note: impl Into<String>) {
         self.transcript.push(TranscriptItem::Note(note.into()));
+    }
+
+    pub(super) fn push_system_prompt(&mut self, prompt: impl Into<String>) {
+        self.transcript.push(TranscriptItem::Note(format!(
+            "system prompt:\n{}",
+            prompt.into()
+        )));
     }
 
     pub(super) fn push_welcome(&mut self, message: impl Into<String>) {

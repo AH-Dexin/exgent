@@ -63,6 +63,14 @@ pub const COMMAND_HELP: &[CommandHelp] = &[
         description_id: MessageId::CmdDebugShowDescription,
     },
     CommandHelp {
+        command: "/debug prompt enable",
+        description_id: MessageId::CmdDebugPromptEnableDescription,
+    },
+    CommandHelp {
+        command: "/debug prompt disable",
+        description_id: MessageId::CmdDebugPromptDisableDescription,
+    },
+    CommandHelp {
         command: "/session",
         description_id: MessageId::CmdSessionDescription,
     },
@@ -87,8 +95,8 @@ pub fn parse_command(input: &str) -> Option<AppCommand<'_>> {
         "/setting theme" | "/settings theme" => Some(AppCommand::SettingsTheme),
         "/setting language" | "/settings language" => Some(AppCommand::SettingsLanguage),
         "/debug" => Some(AppCommand::Debug),
-        "/debug enable" => Some(AppCommand::DebugEnable),
-        "/debug disable" => Some(AppCommand::DebugDisable),
+        "/debug enable" | "/debug prompt enable" => Some(AppCommand::DebugEnable),
+        "/debug disable" | "/debug prompt disable" => Some(AppCommand::DebugDisable),
         "/debug show" => Some(AppCommand::DebugShow),
         "/session" => Some(AppCommand::Session),
         "/compact" => Some(AppCommand::Compact),
@@ -136,7 +144,15 @@ mod tests {
             Some(AppCommand::DebugEnable)
         );
         assert_eq!(
+            parse_command("/debug prompt enable"),
+            Some(AppCommand::DebugEnable)
+        );
+        assert_eq!(
             parse_command("/debug disable"),
+            Some(AppCommand::DebugDisable)
+        );
+        assert_eq!(
+            parse_command("/debug prompt disable"),
             Some(AppCommand::DebugDisable)
         );
         assert_eq!(parse_command("/debug show"), Some(AppCommand::DebugShow));

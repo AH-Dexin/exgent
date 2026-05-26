@@ -72,6 +72,8 @@ pub enum MessageId {
     CmdSettingsLanguageDescription,
     CmdDebugDescription,
     CmdDebugShowDescription,
+    CmdDebugPromptEnableDescription,
+    CmdDebugPromptDisableDescription,
     CmdSessionDescription,
     CmdCompactDescription,
     CmdQuitDescription,
