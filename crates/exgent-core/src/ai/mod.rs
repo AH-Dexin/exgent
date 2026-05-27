@@ -9,8 +9,10 @@ mod types;
 pub use http::shared_blocking_client;
 pub use model_discovery::{discover_available_models, supports_model_discovery, DiscoveredModel};
 pub use models::built_in_models;
+#[cfg(test)]
+pub use providers::fake_model;
 pub use providers::{
-    fake_model, AnthropicMessagesProvider, FakeProvider, GoogleGenerativeAiProvider,
+    AnthropicMessagesProvider, FakeProvider, GoogleGenerativeAiProvider,
     OpenAiCodexResponsesProvider, OpenAiCompatibleProvider, OpenAiResponsesProvider,
     UnsupportedProvider,
 };

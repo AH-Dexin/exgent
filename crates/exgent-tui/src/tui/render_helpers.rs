@@ -92,9 +92,12 @@ pub(super) fn item_lines(item: &TranscriptItem, width: usize) -> Vec<Line<'stati
                 styled_wrapped_lines("", text, width, Style::default().fg(Color::White))
             }
         }
-        TranscriptItem::Reasoning(text) => {
-            styled_wrapped_lines("thinking ", text, width, Style::default().fg(Color::Yellow))
-        }
+        TranscriptItem::Reasoning {
+            content,
+            duration,
+            streaming,
+            ..
+        } => reasoning_lines(content, *duration, *streaming, width),
         TranscriptItem::Tool(text) => {
             styled_wrapped_lines("tool ", text, width, Style::default().fg(Color::Blue))
         }
@@ -105,6 +108,42 @@ pub(super) fn item_lines(item: &TranscriptItem, width: usize) -> Vec<Line<'stati
             styled_wrapped_lines("error ", text, width, Style::default().fg(Color::Red))
         }
     }
+}
+
+fn reasoning_lines(
+    content: &str,
+    duration: Option<std::time::Duration>,
+    streaming: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            "... thinking",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " {}{}",
+                if streaming { "running" } else { "done" },
+                duration
+                    .map(|duration| format!(" · {:.1}s", duration.as_secs_f64()))
+                    .unwrap_or_default()
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])];
+
+    lines.extend(styled_wrapped_lines(
+        "| ",
+        content,
+        width,
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::ITALIC),
+    ));
+    lines
 }
 
 pub(super) fn runtime_activity_text(app: &TuiApp) -> Option<String> {

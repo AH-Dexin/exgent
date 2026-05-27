@@ -270,6 +270,17 @@ impl AppRuntime {
         self.model_service.set_theme(theme)
     }
 
+    pub fn tui_settings(&self) -> crate::settings::TuiSettings {
+        self.model_service.tui_settings()
+    }
+
+    pub fn set_tui_settings(
+        &mut self,
+        settings: crate::settings::TuiSettings,
+    ) -> Result<(), String> {
+        self.model_service.set_tui_settings(settings)
+    }
+
     pub fn keybindings(&self) -> crate::settings::KeyBindings {
         self.model_service.keybindings()
     }

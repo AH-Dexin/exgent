@@ -334,6 +334,7 @@ pub trait ProviderAdapter {
         self.stream_events(request, emit);
     }
 
+    #[allow(dead_code)]
     fn stream(&self, request: ProviderRequest) -> Vec<ProviderEvent> {
         let mut events = Vec::new();
         self.stream_events_cancellable(request, &|| false, &mut |event| events.push(event));

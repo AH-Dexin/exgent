@@ -5,7 +5,10 @@ use std::{
 
 use crossterm::{
     cursor,
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -13,7 +16,7 @@ use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
 
 pub(super) type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
-pub(super) fn enter_terminal() -> io::Result<TuiTerminal> {
+pub(super) fn enter_terminal(enable_mouse_capture: bool) -> io::Result<TuiTerminal> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -22,10 +25,21 @@ pub(super) fn enter_terminal() -> io::Result<TuiTerminal> {
         EnableBracketedPaste,
         cursor::Hide
     )?;
+    if enable_mouse_capture {
+        execute!(stdout, EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
     Ok(terminal)
+}
+
+pub(super) fn set_mouse_capture(terminal: &mut TuiTerminal, enabled: bool) -> io::Result<()> {
+    if enabled {
+        execute!(terminal.backend_mut(), EnableMouseCapture)
+    } else {
+        execute!(terminal.backend_mut(), DisableMouseCapture)
+    }
 }
 
 pub(super) struct TerminalRestoreGuard;
@@ -37,6 +51,7 @@ impl Drop for TerminalRestoreGuard {
         let _ = execute!(
             stdout,
             cursor::Show,
+            DisableMouseCapture,
             DisableBracketedPaste,
             LeaveAlternateScreen
         );

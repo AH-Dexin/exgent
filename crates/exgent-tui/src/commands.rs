@@ -10,6 +10,7 @@ pub enum AppCommand<'a> {
     SettingsModel,
     SettingsTheme,
     SettingsLanguage,
+    SettingsTui,
     Debug,
     DebugEnable,
     DebugDisable,
@@ -55,6 +56,10 @@ pub const COMMAND_HELP: &[CommandHelp] = &[
         description_id: MessageId::CmdSettingsLanguageDescription,
     },
     CommandHelp {
+        command: "/settings tui",
+        description_id: MessageId::CmdSettingsTuiDescription,
+    },
+    CommandHelp {
         command: "/debug",
         description_id: MessageId::CmdDebugDescription,
     },
@@ -94,6 +99,7 @@ pub fn parse_command(input: &str) -> Option<AppCommand<'_>> {
         "/setting model" | "/settings model" => Some(AppCommand::SettingsModel),
         "/setting theme" | "/settings theme" => Some(AppCommand::SettingsTheme),
         "/setting language" | "/settings language" => Some(AppCommand::SettingsLanguage),
+        "/setting tui" | "/settings tui" => Some(AppCommand::SettingsTui),
         "/debug" => Some(AppCommand::Debug),
         "/debug enable" | "/debug prompt enable" => Some(AppCommand::DebugEnable),
         "/debug disable" | "/debug prompt disable" => Some(AppCommand::DebugDisable),
@@ -136,6 +142,10 @@ mod tests {
         assert_eq!(
             parse_command("/setting language"),
             Some(AppCommand::SettingsLanguage)
+        );
+        assert_eq!(
+            parse_command("/settings tui"),
+            Some(AppCommand::SettingsTui)
         );
         assert_eq!(parse_command("/compact"), Some(AppCommand::Compact));
         assert_eq!(parse_command("/debug"), Some(AppCommand::Debug));

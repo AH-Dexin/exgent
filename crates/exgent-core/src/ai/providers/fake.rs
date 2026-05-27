@@ -1,5 +1,7 @@
+#[cfg(test)]
+use super::super::Model;
 use super::super::{
-    AssistantMessage, MessageRole, Model, ProviderAdapter, ProviderEvent, ProviderRequest, ToolCall,
+    AssistantMessage, MessageRole, ProviderAdapter, ProviderEvent, ProviderRequest, ToolCall,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -62,6 +64,7 @@ impl ProviderAdapter for FakeProvider {
     }
 }
 
+#[cfg(test)]
 pub fn fake_model() -> Model {
     Model::new("fake", "fake-chat", "fake")
 }

@@ -7,7 +7,7 @@ use super::forms::{
 };
 use super::overlays::{
     open_auth_settings_overlay, open_language_picker_overlay, open_model_settings_overlay,
-    open_theme_picker_overlay,
+    open_theme_picker_overlay, open_tui_settings_overlay,
 };
 use super::state::*;
 
@@ -64,22 +64,76 @@ pub(super) fn handle_settings_menu_key(
     match key.code {
         KeyCode::Esc => app.overlay = Overlay::None,
         KeyCode::Up => {
-            state.selected = state.selected.checked_sub(1).unwrap_or(3);
+            state.selected = state.selected.checked_sub(1).unwrap_or(4);
             app.overlay = Overlay::SettingsMenu(state.clone());
         }
         KeyCode::Down => {
-            state.selected = (state.selected + 1) % 4;
+            state.selected = (state.selected + 1) % 5;
             app.overlay = Overlay::SettingsMenu(state.clone());
         }
         KeyCode::Enter => match state.selected {
             0 => open_auth_settings_overlay(app, runtime),
             1 => open_model_settings_overlay(app, runtime),
             2 => open_theme_picker_overlay(app, runtime),
-            _ => open_language_picker_overlay(app, runtime),
+            3 => open_language_picker_overlay(app, runtime),
+            _ => open_tui_settings_overlay(app, runtime),
         },
         _ => {}
     }
     UiAction::None
+}
+
+pub(super) fn handle_tui_settings_key(
+    app: &mut TuiApp,
+    runtime: &mut TuiRuntime,
+    key: KeyEvent,
+    state: &mut TuiSettingsState,
+) -> UiAction {
+    match key.code {
+        KeyCode::Esc => app.overlay = Overlay::SettingsMenu(SettingsMenuState { selected: 4 }),
+        KeyCode::Up => {
+            state.selected = state.selected.checked_sub(1).unwrap_or(2);
+            app.overlay = Overlay::TuiSettings(state.clone());
+        }
+        KeyCode::Down => {
+            state.selected = (state.selected + 1) % 3;
+            app.overlay = Overlay::TuiSettings(state.clone());
+        }
+        KeyCode::Char(' ') | KeyCode::Enter => {
+            match state.selected {
+                0 => state.settings.render_throttle = !state.settings.render_throttle,
+                1 => state.settings.transcript_cache = !state.settings.transcript_cache,
+                _ => state.settings.mouse_selection = !state.settings.mouse_selection,
+            }
+            match runtime.set_tui_settings(state.settings) {
+                Ok(()) => {
+                    app.tui_settings = state.settings;
+                    app.transcript_cache.clear();
+                    if !state.settings.mouse_selection {
+                        app.transcript_selection = None;
+                    }
+                    app.push_note(format!(
+                        "tui: render throttle {}, transcript cache {}, mouse selection {}",
+                        setting_status(state.settings.render_throttle),
+                        setting_status(state.settings.transcript_cache),
+                        setting_status(state.settings.mouse_selection)
+                    ));
+                }
+                Err(error) => app.push_error(error),
+            }
+            app.overlay = Overlay::TuiSettings(state.clone());
+        }
+        _ => {}
+    }
+    UiAction::None
+}
+
+fn setting_status(enabled: bool) -> &'static str {
+    if enabled {
+        "enabled"
+    } else {
+        "disabled"
+    }
 }
 
 pub(super) fn handle_auth_settings_key(

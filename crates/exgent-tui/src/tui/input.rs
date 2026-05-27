@@ -13,15 +13,22 @@ use super::settings_input::{
     handle_auth_action_key, handle_auth_settings_key, handle_custom_theme_key,
     handle_language_picker_key, handle_model_action_key, handle_model_picker_key,
     handle_model_settings_key, handle_settings_menu_key, handle_theme_picker_key,
+    handle_tui_settings_key,
 };
 use super::state::*;
 
 type TuiRuntime = AppRuntimeHost;
-const TRANSCRIPT_SCROLL_LINES: usize = 3;
 
 pub(super) fn handle_key(app: &mut TuiApp, runtime: &mut TuiRuntime, key: KeyEvent) -> UiAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        return UiAction::Quit;
+        if app.quit_is_armed() {
+            return UiAction::Quit;
+        }
+        app.arm_quit();
+        app.push_note("press Ctrl+C again to quit");
+        return UiAction::None;
+    } else {
+        app.disarm_quit();
     }
 
     if transcript_scroll_enabled(app) && handle_transcript_scroll_key(app, key) {
@@ -38,6 +45,7 @@ pub(super) fn handle_key(app: &mut TuiApp, runtime: &mut TuiRuntime, key: KeyEve
         }
         Overlay::ModelAction(mut state) => handle_model_action_key(app, runtime, key, &mut state),
         Overlay::ThemePicker(mut state) => handle_theme_picker_key(app, runtime, key, &mut state),
+        Overlay::TuiSettings(mut state) => handle_tui_settings_key(app, runtime, key, &mut state),
         Overlay::CustomTheme(mut state) => handle_custom_theme_key(app, runtime, key, &mut state),
         Overlay::LanguagePicker(mut state) => {
             handle_language_picker_key(app, runtime, key, &mut state)
@@ -73,22 +81,6 @@ fn transcript_scroll_enabled(app: &TuiApp) -> bool {
 
 fn handle_transcript_scroll_key(app: &mut TuiApp, key: KeyEvent) -> bool {
     match key.code {
-        KeyCode::Up
-            if key.modifiers.is_empty()
-                && app.composer.is_empty()
-                && matches!(app.overlay, Overlay::None) =>
-        {
-            app.scroll_transcript_up(TRANSCRIPT_SCROLL_LINES);
-            true
-        }
-        KeyCode::Down
-            if key.modifiers.is_empty()
-                && app.composer.is_empty()
-                && matches!(app.overlay, Overlay::None) =>
-        {
-            app.scroll_transcript_down(TRANSCRIPT_SCROLL_LINES);
-            true
-        }
         KeyCode::PageUp => {
             app.scroll_transcript_up(10);
             true

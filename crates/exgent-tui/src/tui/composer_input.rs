@@ -8,6 +8,7 @@ use super::forms::{active_add_model_field_mut, paste_theme_value};
 use super::overlays::{
     open_auth_settings_overlay, open_language_picker_overlay, open_model_picker_overlay,
     open_model_settings_overlay, open_session_picker_overlay, open_theme_picker_overlay,
+    open_tui_settings_overlay,
 };
 use super::state::*;
 use super::suggestions::slash_suggestions;
@@ -20,10 +21,6 @@ pub(super) fn handle_composer_key(
     key: KeyEvent,
     slash_selected: Option<usize>,
 ) -> UiAction {
-    if app.is_running {
-        return UiAction::None;
-    }
-
     if is_paste_image_key(&key) {
         return paste_clipboard_image(app);
     }
@@ -39,11 +36,9 @@ pub(super) fn handle_composer_key(
                 app.overlay = Overlay::None;
             }
         }
-        KeyCode::Backspace => {
-            if app.composer.backspace() {
-                app.composer.history_index = None;
-                app.sync_slash_menu();
-            }
+        KeyCode::Backspace if app.composer.backspace() => {
+            app.composer.history_index = None;
+            app.sync_slash_menu();
         }
         KeyCode::Tab if app.composer.images.is_empty() && !app.composer.is_multiline() => {
             if let Some(command) = slash_suggestions(&app.composer.input).first() {
@@ -73,6 +68,7 @@ pub(super) fn handle_composer_key(
         KeyCode::Right => app.composer.move_cursor_right(),
         KeyCode::Home => app.composer.move_cursor_to_start(),
         KeyCode::End => app.composer.move_cursor_to_end(),
+        KeyCode::Enter if app.is_running => {}
         KeyCode::Enter => return submit_input(app, runtime, slash_selected),
         KeyCode::Char(value) => {
             app.composer.insert_char(value);
@@ -208,6 +204,11 @@ fn submit_input(
                 open_language_picker_overlay(app, runtime);
                 UiAction::None
             }
+            Some(AppCommand::SettingsTui) => {
+                app.composer.clear();
+                open_tui_settings_overlay(app, runtime);
+                UiAction::None
+            }
             Some(AppCommand::Session) => {
                 app.composer.clear();
                 open_session_picker_overlay(app, runtime);
@@ -285,6 +286,11 @@ fn submit_input(
 
 pub(super) fn handle_paste(app: &mut TuiApp, value: &str) {
     if app.is_running {
+        if matches!(app.overlay, Overlay::None | Overlay::SlashMenu { .. }) {
+            app.composer.insert_str(value);
+            app.composer.history_index = None;
+            app.sync_slash_menu();
+        }
         return;
     }
 

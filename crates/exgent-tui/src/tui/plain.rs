@@ -579,6 +579,10 @@ fn handle_command(runtime: &mut TuiRuntime, input: &str) -> io::Result<bool> {
             settings::open_language_settings(runtime)?;
             Ok(true)
         }
+        Some(AppCommand::SettingsTui) => {
+            settings::open_tui_settings(runtime)?;
+            Ok(true)
+        }
         Some(AppCommand::Debug) => {
             open_debug_menu(runtime)?;
             Ok(true)

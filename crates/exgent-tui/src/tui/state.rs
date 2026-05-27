@@ -1,16 +1,21 @@
+use std::time::{Duration, Instant};
+
 use exgent_core::{
     AgentEvent, AppRuntimeHost, AuthProviderInfo, CompatibleModelKind, ImageContent, Locale,
     ModelMenuItem, ModelSettingsItem, SessionInfo, SubscriptionProviderInfo, ThemeSettings,
-    UsageTotals,
+    TuiSettings, UsageTotals,
 };
 
 use super::settings_actions::AuthProviderSettingsItem as AuthProviderItem;
+use super::transcript_cache::TranscriptCache;
 
 type TuiRuntime = AppRuntimeHost;
 
 #[derive(Clone, Debug)]
 pub(super) struct TuiApp {
     pub(super) transcript: Vec<TranscriptItem>,
+    pub(super) transcript_revisions: Vec<u64>,
+    pub(super) transcript_cache: TranscriptCache,
     pub(super) transcript_scroll: usize,
     pub(super) composer: ComposerState,
     pub(super) overlay: Overlay,
@@ -22,16 +27,21 @@ pub(super) struct TuiApp {
     pub(super) model_reasoning: bool,
     pub(super) is_running: bool,
     pub(super) runtime_activity: Option<RuntimeActivity>,
+    pub(super) quit_armed_until: Option<Instant>,
     pub(super) show_reasoning: bool,
     pub(super) locale: Locale,
     pub(super) theme: ThemeSettings,
     pub(super) theme_preview: Option<ThemeSettings>,
+    pub(super) tui_settings: TuiSettings,
+    pub(super) transcript_selection: Option<TranscriptSelection>,
 }
 
 impl TuiApp {
     pub(super) fn new(runtime: &TuiRuntime) -> Self {
         let mut app = Self {
             transcript: Vec::new(),
+            transcript_revisions: Vec::new(),
+            transcript_cache: TranscriptCache::default(),
             transcript_scroll: 0,
             composer: ComposerState::default(),
             overlay: Overlay::None,
@@ -43,10 +53,13 @@ impl TuiApp {
             model_reasoning: false,
             is_running: false,
             runtime_activity: None,
+            quit_armed_until: None,
             show_reasoning: true,
             locale: runtime.locale(),
             theme: runtime.theme(),
             theme_preview: None,
+            tui_settings: runtime.tui_settings(),
+            transcript_selection: None,
         };
         app.refresh_status(runtime);
         app
@@ -59,6 +72,7 @@ impl TuiApp {
         self.show_reasoning = true;
         self.locale = runtime.locale();
         self.theme = runtime.theme();
+        self.tui_settings = runtime.tui_settings();
         self.cwd = project_dir_label(runtime);
         if let Some(model) = runtime.model_status() {
             self.model_context_window = model.context_window;
@@ -70,27 +84,26 @@ impl TuiApp {
     }
 
     pub(super) fn push_note(&mut self, note: impl Into<String>) {
-        self.transcript.push(TranscriptItem::Note(note.into()));
+        self.push_transcript(TranscriptItem::Note(note.into()));
     }
 
     pub(super) fn push_system_prompt(&mut self, prompt: impl Into<String>) {
-        self.transcript.push(TranscriptItem::Note(format!(
+        self.push_transcript(TranscriptItem::Note(format!(
             "system prompt:\n{}",
             prompt.into()
         )));
     }
 
     pub(super) fn push_welcome(&mut self, message: impl Into<String>) {
-        self.transcript
-            .push(TranscriptItem::Welcome(message.into()));
+        self.push_transcript(TranscriptItem::Welcome(message.into()));
     }
 
     pub(super) fn push_error(&mut self, error: impl Into<String>) {
-        self.transcript.push(TranscriptItem::Error(error.into()));
+        self.push_transcript(TranscriptItem::Error(error.into()));
     }
 
     pub(super) fn push_user(&mut self, input: impl Into<String>) {
-        self.transcript.push(TranscriptItem::User(input.into()));
+        self.push_transcript(TranscriptItem::User(input.into()));
     }
 
     pub(super) fn push_user_with_images(&mut self, input: impl Into<String>, image_count: usize) {
@@ -108,22 +121,22 @@ impl TuiApp {
                 input.push_str(&note);
             }
         }
-        self.transcript.push(TranscriptItem::User(input));
+        self.push_transcript(TranscriptItem::User(input));
     }
 
     pub(super) fn start_assistant(&mut self) {
         self.runtime_activity = Some(RuntimeActivity::Thinking);
-        self.transcript
-            .push(TranscriptItem::Assistant(String::new()));
+        self.push_transcript(TranscriptItem::Assistant(String::new()));
     }
 
     fn append_assistant(&mut self, delta: &str) {
         self.runtime_activity = None;
         match self.transcript.last_mut() {
-            Some(TranscriptItem::Assistant(content)) => content.push_str(delta),
-            _ => self
-                .transcript
-                .push(TranscriptItem::Assistant(delta.to_string())),
+            Some(TranscriptItem::Assistant(content)) => {
+                content.push_str(delta);
+                self.bump_last_transcript_revision();
+            }
+            _ => self.push_transcript(TranscriptItem::Assistant(delta.to_string())),
         }
     }
 
@@ -133,11 +146,57 @@ impl TuiApp {
             return;
         }
         match self.transcript.last_mut() {
-            Some(TranscriptItem::Reasoning(content)) => content.push_str(delta),
-            _ => self
-                .transcript
-                .push(TranscriptItem::Reasoning(delta.to_string())),
+            Some(TranscriptItem::Reasoning {
+                content, streaming, ..
+            }) => {
+                content.push_str(delta);
+                *streaming = true;
+                self.bump_last_transcript_revision();
+            }
+            _ => self.push_transcript(TranscriptItem::Reasoning {
+                content: delta.to_string(),
+                started_at: Instant::now(),
+                duration: None,
+                streaming: true,
+            }),
         }
+    }
+
+    pub(super) fn finish_reasoning(&mut self) {
+        for index in 0..self.transcript.len() {
+            let should_bump = match self.transcript.get_mut(index) {
+                Some(TranscriptItem::Reasoning {
+                    started_at,
+                    duration,
+                    streaming,
+                    ..
+                }) if *streaming => {
+                    *duration = Some(started_at.elapsed());
+                    *streaming = false;
+                    true
+                }
+                _ => false,
+            };
+            if should_bump {
+                let revision = self.next_transcript_revision();
+                if let Some(item_revision) = self.transcript_revisions.get_mut(index) {
+                    *item_revision = revision;
+                }
+            }
+        }
+    }
+
+    pub(super) fn arm_quit(&mut self) {
+        self.quit_armed_until = Some(Instant::now() + Duration::from_secs(2));
+    }
+
+    pub(super) fn disarm_quit(&mut self) {
+        self.quit_armed_until = None;
+    }
+
+    pub(super) fn quit_is_armed(&self) -> bool {
+        self.quit_armed_until
+            .is_some_and(|deadline| Instant::now() <= deadline)
     }
 
     pub(super) fn apply_agent_event(&mut self, event: AgentEvent) {
@@ -159,8 +218,7 @@ impl TuiApp {
                 name, arguments, ..
             } => {
                 self.runtime_activity = Some(RuntimeActivity::Tool(name.clone()));
-                self.transcript
-                    .push(TranscriptItem::Tool(format!("{name}: {arguments:?}")));
+                self.push_transcript(TranscriptItem::Tool(format!("{name}: {arguments:?}")));
             }
             AgentEvent::ToolCallEnd {
                 name,
@@ -169,8 +227,7 @@ impl TuiApp {
                 ..
             } => {
                 let status = if is_error { "error" } else { "ok" };
-                self.transcript
-                    .push(TranscriptItem::Tool(format!("{name} {status}: {content}")));
+                self.push_transcript(TranscriptItem::Tool(format!("{name} {status}: {content}")));
                 self.runtime_activity = Some(RuntimeActivity::Thinking);
             }
             AgentEvent::Error { message } => {
@@ -212,6 +269,83 @@ impl TuiApp {
 
     pub(super) fn clamp_transcript_scroll(&mut self, max_scroll: usize) {
         self.transcript_scroll = self.transcript_scroll.min(max_scroll);
+    }
+
+    pub(super) fn push_transcript(&mut self, item: TranscriptItem) {
+        let revision = self.next_transcript_revision();
+        self.transcript.push(item);
+        self.transcript_revisions.push(revision);
+    }
+
+    pub(super) fn clear_transcript(&mut self) {
+        self.transcript.clear();
+        self.transcript_revisions.clear();
+        self.transcript_cache.clear();
+        self.transcript_selection = None;
+    }
+
+    pub(super) fn sync_transcript_metadata(&mut self) {
+        while self.transcript_revisions.len() < self.transcript.len() {
+            let revision = self.next_transcript_revision();
+            self.transcript_revisions.push(revision);
+        }
+        if self.transcript_revisions.len() > self.transcript.len() {
+            self.transcript_revisions.truncate(self.transcript.len());
+            self.transcript_cache.clear();
+        }
+    }
+
+    fn bump_last_transcript_revision(&mut self) {
+        let revision = self.next_transcript_revision();
+        if let Some(last) = self.transcript_revisions.last_mut() {
+            *last = revision;
+        } else {
+            self.transcript_revisions.push(revision);
+        }
+    }
+
+    fn next_transcript_revision(&mut self) -> u64 {
+        let revision = self
+            .transcript_revisions
+            .last()
+            .copied()
+            .unwrap_or(0)
+            .max(1)
+            .max(self.transcript_revisions.len() as u64 + 1);
+        revision.saturating_add(1)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TranscriptPosition {
+    pub(super) line: usize,
+    pub(super) column: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TranscriptSelection {
+    pub(super) anchor: TranscriptPosition,
+    pub(super) head: TranscriptPosition,
+    pub(super) dragging: bool,
+    pub(super) moved: bool,
+}
+
+impl TranscriptSelection {
+    pub(super) fn new(position: TranscriptPosition) -> Self {
+        Self {
+            anchor: position,
+            head: position,
+            dragging: true,
+            moved: false,
+        }
+    }
+
+    pub(super) fn normalized(&self) -> (TranscriptPosition, TranscriptPosition) {
+        if (self.anchor.line, self.anchor.column) <= (self.head.line, self.head.column) {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
     }
 }
 
@@ -427,6 +561,7 @@ pub(super) enum Overlay {
     ModelSettings(ModelSettingsState),
     ModelAction(ModelActionState),
     ThemePicker(ThemePickerState),
+    TuiSettings(TuiSettingsState),
     CustomTheme(CustomThemeState),
     LanguagePicker(LanguagePickerState),
     SessionPicker(SessionPickerState),
@@ -483,6 +618,12 @@ pub(super) struct ModelActionState {
 #[derive(Clone, Debug)]
 pub(super) struct ThemePickerState {
     pub(super) selected: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TuiSettingsState {
+    pub(super) selected: usize,
+    pub(super) settings: TuiSettings,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -583,7 +724,12 @@ pub(super) enum TranscriptItem {
     Welcome(String),
     User(String),
     Assistant(String),
-    Reasoning(String),
+    Reasoning {
+        content: String,
+        started_at: Instant,
+        duration: Option<Duration>,
+        streaming: bool,
+    },
     Tool(String),
     Note(String),
     Error(String),
@@ -683,6 +829,8 @@ mod tests {
     fn transcript_scroll_state_moves_and_clamps() {
         let mut app = TuiApp {
             transcript: Vec::new(),
+            transcript_revisions: Vec::new(),
+            transcript_cache: TranscriptCache::default(),
             transcript_scroll: 0,
             composer: ComposerState::default(),
             overlay: Overlay::None,
@@ -694,10 +842,13 @@ mod tests {
             model_reasoning: false,
             is_running: false,
             runtime_activity: None,
+            quit_armed_until: None,
             show_reasoning: false,
             locale: Locale::En,
             theme: ThemeSettings::default(),
             theme_preview: None,
+            tui_settings: TuiSettings::default(),
+            transcript_selection: None,
         };
 
         app.scroll_transcript_up(20);

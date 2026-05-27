@@ -10,7 +10,8 @@ use ratatui::{
 };
 
 use exgent_core::{
-    AppRuntimeHost, ModelSettingsItem, ThemeRgb, ThemeSettings, LANGUAGE_OPTIONS, THEME_PRESETS,
+    AppRuntimeHost, ModelSettingsItem, ThemeRgb, ThemeSettings, TuiSettings, LANGUAGE_OPTIONS,
+    THEME_PRESETS,
 };
 
 use super::settings_actions::{
@@ -44,7 +45,7 @@ pub(super) fn open_model_settings(runtime: &mut TuiRuntime) -> io::Result<()> {
 
 pub(super) fn open_settings_menu(runtime: &mut TuiRuntime) -> io::Result<()> {
     refresh_active_footer(runtime);
-    let labels = ["auth", "model", "theme", "language"];
+    let labels = ["auth", "model", "theme", "language", "tui"];
     let selected = if io::stdin().is_terminal() && io::stdout().is_terminal() {
         select_with_keys("Select settings:", &labels)?
     } else {
@@ -53,6 +54,7 @@ pub(super) fn open_settings_menu(runtime: &mut TuiRuntime) -> io::Result<()> {
         println!("2) model");
         println!("3) theme");
         println!("4) language");
+        println!("5) tui");
         let Some(line) = read_cancelable_line("select settings: ")? else {
             return Ok(());
         };
@@ -61,6 +63,7 @@ pub(super) fn open_settings_menu(runtime: &mut TuiRuntime) -> io::Result<()> {
             "2" | "model" => Some(1),
             "3" | "theme" => Some(2),
             "4" | "language" => Some(3),
+            "5" | "tui" => Some(4),
             "" => None,
             _ => {
                 println!("invalid settings selection");
@@ -74,10 +77,83 @@ pub(super) fn open_settings_menu(runtime: &mut TuiRuntime) -> io::Result<()> {
         Some(1) => open_model_settings(runtime),
         Some(2) => open_theme_settings(runtime),
         Some(3) => open_language_settings(runtime),
+        Some(4) => open_tui_settings(runtime),
         _ => {
             println!("settings cancelled");
             Ok(())
         }
+    }
+}
+
+pub(super) fn open_tui_settings(runtime: &mut TuiRuntime) -> io::Result<()> {
+    refresh_active_footer(runtime);
+    let mut settings = runtime.tui_settings();
+    let labels = tui_settings_labels(settings);
+    let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
+
+    let selected = if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        select_with_keys("Select TUI setting:", &label_refs)?
+    } else {
+        println!("Select TUI setting:");
+        for (index, label) in labels.iter().enumerate() {
+            println!("{}) {label}", index + 1);
+        }
+        let Some(line) = read_cancelable_line("select tui setting: ")? else {
+            return Ok(());
+        };
+        match line.trim() {
+            "1" | "render" | "render throttle" => Some(0),
+            "2" | "cache" | "transcript cache" => Some(1),
+            "3" | "mouse" | "mouse selection" => Some(2),
+            "" => None,
+            _ => None,
+        }
+    };
+
+    let Some(selected) = selected else {
+        println!("tui settings cancelled");
+        return Ok(());
+    };
+
+    match selected {
+        0 => settings.render_throttle = !settings.render_throttle,
+        1 => settings.transcript_cache = !settings.transcript_cache,
+        _ => settings.mouse_selection = !settings.mouse_selection,
+    }
+    match runtime.set_tui_settings(settings) {
+        Ok(()) => println!(
+            "tui: render throttle {}, transcript cache {}, mouse selection {}",
+            tui_setting_status(settings.render_throttle),
+            tui_setting_status(settings.transcript_cache),
+            tui_setting_status(settings.mouse_selection)
+        ),
+        Err(error) => eprintln!("error: {error}"),
+    }
+    Ok(())
+}
+
+fn tui_settings_labels(settings: TuiSettings) -> [String; 3] {
+    [
+        format!(
+            "render throttle  {}",
+            tui_setting_status(settings.render_throttle)
+        ),
+        format!(
+            "transcript cache {}",
+            tui_setting_status(settings.transcript_cache)
+        ),
+        format!(
+            "mouse selection {}",
+            tui_setting_status(settings.mouse_selection)
+        ),
+    ]
+}
+
+fn tui_setting_status(enabled: bool) -> &'static str {
+    if enabled {
+        "on"
+    } else {
+        "off"
     }
 }
 

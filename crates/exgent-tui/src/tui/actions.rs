@@ -65,12 +65,11 @@ pub(super) fn set_model_items_enabled(
 
 pub(super) fn load_recent_messages(app: &mut TuiApp, runtime: &TuiRuntime) {
     for message in runtime.recent_messages(20) {
-        match message.role.as_str() {
-            "user" => app.transcript.push(TranscriptItem::User(message.content)),
-            "assistant" => app
-                .transcript
-                .push(TranscriptItem::Assistant(message.content)),
-            _ => app.transcript.push(TranscriptItem::Note(message.content)),
-        }
+        let item = match message.role.as_str() {
+            "user" => TranscriptItem::User(message.content),
+            "assistant" => TranscriptItem::Assistant(message.content),
+            _ => TranscriptItem::Note(message.content),
+        };
+        app.push_transcript(item);
     }
 }

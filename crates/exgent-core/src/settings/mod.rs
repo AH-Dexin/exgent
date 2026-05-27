@@ -91,6 +91,14 @@ impl SettingsStore {
         self.settings.theme = theme;
     }
 
+    pub fn tui(&self) -> TuiSettings {
+        self.settings.tui
+    }
+
+    pub fn set_tui(&mut self, tui: TuiSettings) {
+        self.settings.tui = tui;
+    }
+
     pub fn keybindings(&self) -> &KeyBindings {
         &self.settings.keybindings
     }
@@ -122,6 +130,8 @@ struct SettingsFile {
     #[serde(default)]
     theme: ThemeSettings,
     #[serde(default)]
+    tui: TuiSettings,
+    #[serde(default)]
     keybindings: KeyBindings,
 }
 
@@ -137,9 +147,34 @@ impl Default for SettingsFile {
             prompt_display_enabled: false,
             locale: default_locale(),
             theme: ThemeSettings::default(),
+            tui: TuiSettings::default(),
             keybindings: KeyBindings::default(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TuiSettings {
+    #[serde(default = "default_true")]
+    pub render_throttle: bool,
+    #[serde(default = "default_true")]
+    pub transcript_cache: bool,
+    #[serde(default = "default_true")]
+    pub mouse_selection: bool,
+}
+
+impl Default for TuiSettings {
+    fn default() -> Self {
+        Self {
+            render_throttle: true,
+            transcript_cache: true,
+            mouse_selection: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Editor- and app-level key bindings. Each action maps to a list of stroke
@@ -451,6 +486,34 @@ mod tests {
             ThemeSettings {
                 name: "custom".to_string(),
                 rgb: ThemeRgb::new(12, 34, 56),
+            }
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tui_settings_default_enabled_and_persist() {
+        let dir = test_dir("tui_settings_default_enabled_and_persist");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut settings = SettingsStore::load(Some(dir.to_str().unwrap())).unwrap();
+        assert_eq!(settings.tui(), TuiSettings::default());
+
+        settings.set_tui(TuiSettings {
+            render_throttle: false,
+            transcript_cache: false,
+            mouse_selection: false,
+        });
+        settings.save().unwrap();
+
+        let loaded = SettingsStore::load(Some(dir.to_str().unwrap())).unwrap();
+        assert_eq!(
+            loaded.tui(),
+            TuiSettings {
+                render_throttle: false,
+                transcript_cache: false,
+                mouse_selection: false,
             }
         );
 

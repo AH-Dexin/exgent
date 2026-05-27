@@ -8,7 +8,9 @@ mod stream;
 mod unsupported;
 
 pub use anthropic::AnthropicMessagesProvider;
-pub use fake::{fake_model, FakeProvider};
+#[cfg(test)]
+pub use fake::fake_model;
+pub use fake::FakeProvider;
 pub use google::GoogleGenerativeAiProvider;
 pub use openai_chat::OpenAiCompatibleProvider;
 pub use openai_codex_responses::OpenAiCodexResponsesProvider;

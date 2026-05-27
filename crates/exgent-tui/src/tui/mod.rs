@@ -7,10 +7,13 @@ mod app;
 mod auth_flow;
 mod auth_input;
 mod clipboard_image;
+mod clipboard_text;
 mod composer_input;
 mod formatting;
 mod forms;
+mod frame_rate_limiter;
 mod input;
+mod mouse_input;
 mod overlays;
 mod plain;
 mod plain_auth;
@@ -26,6 +29,7 @@ mod settings_input;
 mod state;
 mod suggestions;
 mod terminal;
+mod transcript_cache;
 
 use plain::{
     accent, bold, clear_rendered_block, dim, exit_process, finish_inline_terminal, inline_height,

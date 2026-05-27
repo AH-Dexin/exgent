@@ -7,7 +7,7 @@ use super::settings_actions::{
 use super::state::{
     ApiKeyProviderState, AuthSettingsState, LanguagePickerState, ModelPickerState,
     ModelSettingsState, Overlay, SessionPickerState, SubscriptionProviderState, ThemePickerState,
-    TuiApp,
+    TuiApp, TuiSettingsState,
 };
 
 type TuiRuntime = AppRuntimeHost;
@@ -70,6 +70,15 @@ pub(super) fn open_language_picker_overlay(app: &mut TuiApp, runtime: &TuiRuntim
         .position(|option| option.locale == locale)
         .unwrap_or(0);
     app.overlay = Overlay::LanguagePicker(LanguagePickerState { selected });
+}
+
+pub(super) fn open_tui_settings_overlay(app: &mut TuiApp, runtime: &TuiRuntime) {
+    let settings = runtime.tui_settings();
+    app.tui_settings = settings;
+    app.overlay = Overlay::TuiSettings(TuiSettingsState {
+        selected: 0,
+        settings,
+    });
 }
 
 pub(super) fn open_session_picker_overlay(app: &mut TuiApp, runtime: &TuiRuntime) {

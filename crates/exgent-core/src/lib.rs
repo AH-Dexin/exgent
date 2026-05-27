@@ -45,7 +45,8 @@ pub use runtime::{
     ModelSettingsItem, ModelStatus, SessionInfo, SubscriptionProviderInfo,
 };
 pub use settings::{
-    KeyAction, KeyBindings, SettingsStore, ThemePreset, ThemeRgb, ThemeSettings, THEME_PRESETS,
+    KeyAction, KeyBindings, SettingsStore, ThemePreset, ThemeRgb, ThemeSettings, TuiSettings,
+    THEME_PRESETS,
 };
 pub use storage::{FsStorage, InMemoryStorage, Storage};
 pub use tools::{Tool, ToolOutput, ToolRegistry};

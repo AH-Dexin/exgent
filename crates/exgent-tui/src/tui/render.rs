@@ -33,37 +33,66 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &mut TuiApp) {
         return;
     }
 
+    let layout = app_layout(area, &app.composer);
+
+    render_header(frame, layout.header, app);
+    render_transcript(frame, layout.transcript, app);
+    if let Some(sidebar) = layout.sidebar {
+        render_sidebar(frame, sidebar, app);
+    }
+    render_composer(frame, layout.composer, app);
+    render_footer(frame, layout.footer, app);
+    render_overlay(frame, area, app);
+}
+
+pub(super) fn transcript_area(area: Rect, composer: &ComposerState) -> Rect {
+    app_layout(area, composer).transcript
+}
+
+struct AppLayout {
+    header: Rect,
+    transcript: Rect,
+    sidebar: Option<Rect>,
+    composer: Rect,
+    footer: Rect,
+}
+
+fn app_layout(area: Rect, composer: &ComposerState) -> AppLayout {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(composer_height(area, &app.composer)),
+            Constraint::Length(composer_height(area, composer)),
             Constraint::Length(1),
         ])
         .split(area);
 
-    render_header(frame, vertical[0], app);
+    let header = vertical.first().copied().unwrap_or(area);
+    let body = vertical.get(1).copied().unwrap_or(area);
+    let composer_area = vertical.get(2).copied().unwrap_or(Rect::default());
+    let footer = vertical.get(3).copied().unwrap_or(Rect::default());
+
     let show_sidebar = area.width >= SIDEBAR_MIN_WIDTH;
     let body_chunks = if show_sidebar {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(SIDEBAR_WIDTH)])
-            .split(vertical[1])
+            .split(body)
     } else {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(100)])
-            .split(vertical[1])
+            .split(body)
     };
 
-    render_transcript(frame, body_chunks[0], app);
-    if show_sidebar {
-        render_sidebar(frame, body_chunks[1], app);
+    AppLayout {
+        header,
+        transcript: body_chunks.first().copied().unwrap_or(body),
+        sidebar: show_sidebar.then(|| body_chunks.get(1).copied()).flatten(),
+        composer: composer_area,
+        footer,
     }
-    render_composer(frame, vertical[2], app);
-    render_footer(frame, vertical[3], app);
-    render_overlay(frame, area, app);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -91,17 +120,96 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut TuiApp) {
 
     let visible = lines
         .into_iter()
+        .enumerate()
         .skip(start)
         .take(height)
+        .map(|(line_index, line)| selected_transcript_line(app, line_index, line))
         .collect::<Vec<_>>();
     Paragraph::new(Text::from(visible)).render(area, frame.buffer_mut());
 }
 
-fn transcript_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
+pub(super) fn transcript_position_at(
+    app: &mut TuiApp,
+    area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<TranscriptPosition> {
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let lines = transcript_lines(app, usize::from(area.width).max(1));
+    if lines.is_empty() {
+        return None;
+    }
+    let height = usize::from(area.height);
+    let (start, scroll) = transcript_visible_start(lines.len(), height, app.transcript_scroll);
+    app.clamp_transcript_scroll(scroll);
+    let row_index = usize::from(
+        row.saturating_sub(area.y)
+            .min(area.height.saturating_sub(1)),
+    );
+    let line = start.saturating_add(row_index).min(lines.len() - 1);
+    let text_width = line_display_width(&lines[line]);
+    let column = usize::from(
+        column
+            .saturating_sub(area.x)
+            .min(area.width.saturating_sub(1)),
+    )
+    .min(text_width);
+    Some(TranscriptPosition { line, column })
+}
+
+pub(super) fn selected_transcript_text(app: &mut TuiApp, width: usize) -> String {
+    let Some(selection) = app.transcript_selection.clone() else {
+        return String::new();
+    };
+    let lines = transcript_lines(app, width);
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let (start, end) = selection.normalized();
+    let start_line = start.line.min(lines.len() - 1);
+    let end_line = end.line.min(lines.len() - 1);
+    let mut selected = Vec::new();
+    for (line_index, line) in lines.iter().enumerate().take(end_line + 1).skip(start_line) {
+        let text = line_plain_text(line);
+        let line_width = UnicodeWidthStr::width(text.as_str());
+        let from = if line_index == start_line {
+            start.column.min(line_width)
+        } else {
+            0
+        };
+        let to = if line_index == end_line {
+            end.column.saturating_add(1).min(line_width)
+        } else {
+            line_width
+        };
+        if from < to {
+            selected.push(slice_display_columns(&text, from, to));
+        } else if start_line != end_line {
+            selected.push(String::new());
+        }
+    }
+    selected.join("\n")
+}
+
+pub(super) fn transcript_lines(app: &mut TuiApp, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
+    app.sync_transcript_metadata();
     let mut lines = Vec::new();
-    for item in &app.transcript {
-        let mut item_lines = item_lines(item, width);
+    for index in 0..app.transcript.len() {
+        let revision = app.transcript_revisions[index];
+        let mut item_lines = if !app.tui_settings.transcript_cache {
+            item_lines(&app.transcript[index], width)
+        } else if let Some(cached) = app.transcript_cache.get(index, width, revision) {
+            cached.to_vec()
+        } else {
+            let rendered = item_lines(&app.transcript[index], width);
+            app.transcript_cache
+                .insert(index, width, revision, rendered.clone());
+            rendered
+        };
         if !item_lines.is_empty() {
             lines.append(&mut item_lines);
             lines.push(Line::raw(""));
@@ -124,6 +232,119 @@ fn transcript_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+fn selected_transcript_line(app: &TuiApp, line_index: usize, line: Line<'static>) -> Line<'static> {
+    let Some(selection) = app.transcript_selection.as_ref() else {
+        return line;
+    };
+    let (start, end) = selection.normalized();
+    if line_index < start.line || line_index > end.line {
+        return line;
+    }
+
+    let line_width = line_display_width(&line);
+    let from = if line_index == start.line {
+        start.column.min(line_width)
+    } else {
+        0
+    };
+    let to = if line_index == end.line {
+        end.column.saturating_add(1).min(line_width)
+    } else {
+        line_width
+    };
+    if from >= to {
+        return line;
+    }
+
+    let mut column = 0usize;
+    let mut spans = Vec::new();
+    for span in line.spans {
+        let span_width = UnicodeWidthStr::width(span.content.as_ref());
+        spans.extend(split_span_for_selection(span, column, from, to));
+        column = column.saturating_add(span_width);
+    }
+    Line::from(spans)
+}
+
+fn split_span_for_selection(
+    span: Span<'static>,
+    span_start: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> Vec<Span<'static>> {
+    let mut pieces = Vec::new();
+    let mut plain = String::new();
+    let mut selected = String::new();
+    let mut column = span_start;
+    let base_style = span.style;
+
+    for ch in span.content.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        let char_start = column;
+        let char_end = column.saturating_add(width.max(1));
+        let is_selected = char_start < selection_end && char_end > selection_start;
+        if is_selected {
+            if !plain.is_empty() {
+                pieces.push(Span::styled(std::mem::take(&mut plain), base_style));
+            }
+            selected.push(ch);
+        } else {
+            if !selected.is_empty() {
+                pieces.push(Span::styled(
+                    std::mem::take(&mut selected),
+                    selection_style(base_style),
+                ));
+            }
+            plain.push(ch);
+        }
+        column = char_end;
+    }
+
+    if !plain.is_empty() {
+        pieces.push(Span::styled(plain, base_style));
+    }
+    if !selected.is_empty() {
+        pieces.push(Span::styled(selected, selection_style(base_style)));
+    }
+    pieces
+}
+
+fn selection_style(style: Style) -> Style {
+    style.add_modifier(Modifier::REVERSED)
+}
+
+fn line_display_width(line: &Line<'_>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn line_plain_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+fn slice_display_columns(text: &str, start: usize, end: usize) -> String {
+    let mut result = String::new();
+    let mut column = 0usize;
+    for ch in text.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+        let char_start = column;
+        let char_end = column.saturating_add(width);
+        if char_start < end && char_end > start {
+            result.push(ch);
+        }
+        column = char_end;
+        if column >= end {
+            break;
+        }
+    }
+    result
 }
 
 fn transcript_visible_start(
@@ -273,11 +494,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
 
 fn composer_height(area: Rect, composer: &ComposerState) -> u16 {
     let min_height = if area.width < 50 { 4 } else { 3 };
-    let max_height = area
-        .height
-        .saturating_sub(2)
-        .max(1)
-        .min(COMPOSER_MAX_HEIGHT);
+    let max_height = area.height.saturating_sub(2).clamp(1, COMPOSER_MAX_HEIGHT);
     let inner_width = area.width.saturating_sub(2);
     let input_width =
         usize::from(inner_width).saturating_sub(UnicodeWidthStr::width(COMPOSER_PROMPT));
@@ -473,6 +690,7 @@ fn render_overlay(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             accent,
         ),
         Overlay::ThemePicker(state) => render_theme_picker(frame, area, app, state),
+        Overlay::TuiSettings(state) => render_tui_settings(frame, area, state, app.locale, accent),
         Overlay::CustomTheme(state) => render_custom_theme_form(frame, area, app, state),
         Overlay::LanguagePicker(state) => render_language_picker(frame, area, app, state),
         Overlay::SessionPicker(state) => {
@@ -601,6 +819,7 @@ fn render_settings_menu(
         tr(locale, MessageId::SettingsModel),
         tr(locale, MessageId::SettingsTheme),
         tr(locale, MessageId::SettingsLanguage),
+        tr(locale, MessageId::SettingsTui),
     ];
     render_action_menu(
         frame,
@@ -726,6 +945,50 @@ fn render_action_menu(
     Paragraph::new(Text::from(lines))
         .block(dialog_block(title, accent))
         .render(popup, frame.buffer_mut());
+}
+
+fn render_tui_settings(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiSettingsState,
+    locale: Locale,
+    accent: Color,
+) {
+    let labels = [
+        format!(
+            "render throttle  {}",
+            if state.settings.render_throttle {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "transcript cache {}",
+            if state.settings.transcript_cache {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "mouse selection {}",
+            if state.settings.mouse_selection {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+    ];
+    let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
+    render_action_menu(
+        frame,
+        area,
+        tr(locale, MessageId::DialogTuiSettings),
+        &label_refs,
+        state.selected,
+        accent,
+    );
 }
 
 fn render_theme_picker(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, state: &ThemePickerState) {

@@ -362,6 +362,19 @@ impl ModelService {
         self.save_settings(previous)
     }
 
+    pub fn tui_settings(&self) -> crate::settings::TuiSettings {
+        self.settings.tui()
+    }
+
+    pub fn set_tui_settings(
+        &mut self,
+        settings: crate::settings::TuiSettings,
+    ) -> Result<(), String> {
+        let previous = self.snapshot();
+        self.settings.set_tui(settings);
+        self.save_settings(previous)
+    }
+
     pub fn keybindings(&self) -> crate::settings::KeyBindings {
         self.settings.keybindings().clone()
     }
