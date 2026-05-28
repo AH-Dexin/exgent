@@ -19,14 +19,18 @@ use super::composer_input::handle_paste;
 use super::frame_rate_limiter::FrameRateLimiter;
 use super::input::handle_key;
 use super::mouse_input::handle_mouse;
+use super::paste_burst::{FlushResult, PasteBurstAction};
 use super::prompt::handle_running_prompt_key;
 use super::render::render;
 use super::state::*;
 use super::terminal::{
-    enter_terminal, handle_resize, set_mouse_capture, TerminalRestoreGuard, TuiTerminal,
+    enter_terminal, handle_resize, recover_terminal_modes, set_mouse_capture, TerminalRestoreGuard,
+    TuiTerminal,
 };
 
 type TuiRuntime = AppRuntimeHost;
+
+const FOCUS_RECOVERY_DEBOUNCE: Duration = Duration::from_millis(250);
 
 pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
@@ -52,9 +56,13 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
         let mut active_prompt: Option<ActivePrompt> = None;
         let mut frame_rate_limiter = FrameRateLimiter::default();
         let mut needs_draw = true;
+        let mut last_focus_recovery: Option<Instant> = None;
 
         loop {
             if drain_prompt_updates(&mut app, &mut active_prompt, &runtime) {
+                needs_draw = true;
+            }
+            if flush_paste_burst_if_due(&mut app, Instant::now()) {
                 needs_draw = true;
             }
 
@@ -74,7 +82,7 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
                 }
             }
 
-            let poll_timeout = if needs_draw {
+            let mut poll_timeout = if needs_draw {
                 frame_rate_limiter
                     .time_until_next_draw(Instant::now())
                     .unwrap_or(Duration::from_millis(1))
@@ -84,7 +92,13 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
             } else {
                 Duration::from_millis(250)
             };
+            if let Some(flush_delay) = app.paste_burst.next_flush_delay(Instant::now()) {
+                poll_timeout = poll_timeout.min(flush_delay);
+            }
             if !event::poll(poll_timeout)? {
+                if flush_paste_burst_if_due(&mut app, Instant::now()) {
+                    needs_draw = true;
+                }
                 continue;
             }
 
@@ -94,6 +108,11 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
                         needs_draw = true;
                         continue;
                     }
+                    if handle_paste_burst_key(&mut app, &key) {
+                        needs_draw = true;
+                        continue;
+                    }
+                    let _ = flush_paste_burst_before_modified_input(&mut app);
                     if app.is_running {
                         handle_running_prompt_key(&mut app, key);
                         needs_draw = true;
@@ -172,6 +191,7 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
                     needs_draw = true;
                 }
                 Event::Paste(value) => {
+                    app.paste_burst.mark_bracketed_paste_seen();
                     handle_paste(&mut app, &value);
                     needs_draw = true;
                 }
@@ -182,10 +202,68 @@ pub(super) fn run(runtime: &mut TuiRuntime) -> io::Result<()> {
                         needs_draw = true;
                     }
                 }
+                Event::FocusGained => {
+                    let now = Instant::now();
+                    let should_recover = last_focus_recovery
+                        .is_none_or(|last| now.duration_since(last) >= FOCUS_RECOVERY_DEBOUNCE);
+                    if should_recover {
+                        recover_terminal_modes(terminal.backend_mut(), mouse_capture);
+                        last_focus_recovery = Some(now);
+                    }
+                    terminal.clear()?;
+                    needs_draw = true;
+                }
                 _ => {}
             }
         }
     })
+}
+
+fn handle_paste_burst_key(app: &mut TuiApp, key: &KeyEvent) -> bool {
+    if !matches!(app.overlay, Overlay::None | Overlay::SlashMenu { .. }) {
+        return false;
+    }
+
+    match app.paste_burst.observe_key(key, Instant::now()) {
+        PasteBurstAction::Handled => true,
+        PasteBurstAction::InsertNewline => {
+            app.composer.insert_char('\n');
+            app.composer.history_index = None;
+            app.sync_slash_menu();
+            true
+        }
+        PasteBurstAction::None => false,
+    }
+}
+
+fn flush_paste_burst_if_due(app: &mut TuiApp, now: Instant) -> bool {
+    let result = app.paste_burst.flush_if_due(now);
+    apply_paste_burst_flush(app, result)
+}
+
+fn flush_paste_burst_before_modified_input(app: &mut TuiApp) -> bool {
+    if !matches!(app.overlay, Overlay::None | Overlay::SlashMenu { .. }) {
+        app.paste_burst.clear_after_explicit_paste();
+        return false;
+    }
+    let result = app.paste_burst.flush_before_modified_input();
+    apply_paste_burst_flush(app, result)
+}
+
+fn apply_paste_burst_flush(app: &mut TuiApp, result: FlushResult) -> bool {
+    match result {
+        FlushResult::Paste(text) => {
+            app.insert_paste_text(&text);
+            true
+        }
+        FlushResult::Typed(ch) => {
+            app.composer.insert_char(ch);
+            app.composer.history_index = None;
+            app.sync_slash_menu();
+            true
+        }
+        FlushResult::None => false,
+    }
 }
 
 fn sync_mouse_capture(

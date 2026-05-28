@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use exgent_core::{
     AgentEvent, AppRuntimeHost, AuthProviderInfo, CompatibleModelKind, ImageContent, Locale,
@@ -6,6 +9,8 @@ use exgent_core::{
     TuiSettings, UsageTotals,
 };
 
+use super::paste_burst::PasteBurst;
+use super::paste_text::{prepare_paste_text, truncate_large_paste_fallback};
 use super::settings_actions::AuthProviderSettingsItem as AuthProviderItem;
 use super::transcript_cache::TranscriptCache;
 
@@ -22,6 +27,7 @@ pub(super) struct TuiApp {
     pub(super) model_label: String,
     pub(super) session_id: String,
     pub(super) cwd: String,
+    pub(super) project_dir: PathBuf,
     pub(super) usage: UsageTotals,
     pub(super) model_context_window: Option<u64>,
     pub(super) model_reasoning: bool,
@@ -34,6 +40,7 @@ pub(super) struct TuiApp {
     pub(super) theme_preview: Option<ThemeSettings>,
     pub(super) tui_settings: TuiSettings,
     pub(super) transcript_selection: Option<TranscriptSelection>,
+    pub(super) paste_burst: PasteBurst,
 }
 
 impl TuiApp {
@@ -48,6 +55,7 @@ impl TuiApp {
             model_label: String::new(),
             session_id: String::new(),
             cwd: project_dir_label(runtime),
+            project_dir: runtime.project_dir().to_path_buf(),
             usage: UsageTotals::default(),
             model_context_window: None,
             model_reasoning: false,
@@ -60,6 +68,7 @@ impl TuiApp {
             theme_preview: None,
             tui_settings: runtime.tui_settings(),
             transcript_selection: None,
+            paste_burst: PasteBurst::default(),
         };
         app.refresh_status(runtime);
         app
@@ -74,6 +83,7 @@ impl TuiApp {
         self.theme = runtime.theme();
         self.tui_settings = runtime.tui_settings();
         self.cwd = project_dir_label(runtime);
+        self.project_dir = runtime.project_dir().to_path_buf();
         if let Some(model) = runtime.model_status() {
             self.model_context_window = model.context_window;
             self.model_reasoning = model.reasoning;
@@ -282,6 +292,21 @@ impl TuiApp {
         self.transcript_revisions.clear();
         self.transcript_cache.clear();
         self.transcript_selection = None;
+    }
+
+    pub(super) fn insert_paste_text(&mut self, value: &str) {
+        match prepare_paste_text(&self.project_dir, value) {
+            Ok(prepared) if !prepared.is_empty() => self.composer.insert_str(&prepared),
+            Ok(_) => {}
+            Err(error) => {
+                self.push_error(format!("failed to write paste file: {error}"));
+                self.composer
+                    .insert_str(&truncate_large_paste_fallback(value));
+            }
+        }
+        self.composer.history_index = None;
+        self.sync_slash_menu();
+        self.paste_burst.clear_after_explicit_paste();
     }
 
     pub(super) fn sync_transcript_metadata(&mut self) {
@@ -837,6 +862,7 @@ mod tests {
             model_label: String::new(),
             session_id: String::new(),
             cwd: String::new(),
+            project_dir: PathBuf::from("."),
             usage: UsageTotals::default(),
             model_context_window: None,
             model_reasoning: false,
@@ -849,6 +875,7 @@ mod tests {
             theme_preview: None,
             tui_settings: TuiSettings::default(),
             transcript_selection: None,
+            paste_burst: PasteBurst::default(),
         };
 
         app.scroll_transcript_up(20);

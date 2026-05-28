@@ -5,12 +5,15 @@ use std::{
         Arc, Mutex, OnceLock,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
     execute,
     terminal::{self, ClearType},
 };
@@ -29,6 +32,8 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::commands::{parse_command, AppCommand, COMMAND_HELP};
 
+use super::paste_burst::{FlushResult, PasteBurst, PasteBurstAction};
+use super::paste_text::{prepare_paste_text, truncate_large_paste_fallback};
 use super::{
     plain_auth::open_auth_menu,
     plain_events::{event_has_visible_output, EventRenderer},
@@ -983,12 +988,14 @@ pub(super) struct RawModeGuard;
 impl RawModeGuard {
     pub(super) fn enable() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
+        execute!(io::stdout(), EnableBracketedPaste)?;
         Ok(Self)
     }
 }
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -1042,37 +1049,91 @@ fn read_line_with_history_manual_loop(
     let mut history_index = None;
     let mut draft = String::new();
     let mut completion_lines = 0usize;
+    let mut paste_burst = PasteBurst::default();
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| ".".into());
 
     print!("{prompt}");
     render_footer(footer)?;
     io::stdout().flush()?;
 
     loop {
+        if flush_plain_paste_burst_if_due(
+            &mut paste_burst,
+            &mut input,
+            prompt,
+            &mut completion_lines,
+            footer,
+            &project_dir,
+            Instant::now(),
+        )? {
+            history_index = None;
+        }
+
+        let poll_timeout = paste_burst
+            .next_flush_delay(Instant::now())
+            .unwrap_or(Duration::from_millis(250));
+        if !event::poll(poll_timeout)? {
+            if flush_plain_paste_burst_if_due(
+                &mut paste_burst,
+                &mut input,
+                prompt,
+                &mut completion_lines,
+                footer,
+                &project_dir,
+                Instant::now(),
+            )? {
+                history_index = None;
+            }
+            continue;
+        }
+
         match event::read()? {
-            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::Enter => {
-                    clear_completion_block(prompt, &input, &mut completion_lines, footer)?;
-                    print_terminal_newline()?;
-                    return Ok(Some(input));
-                }
-                KeyCode::Esc => {
-                    clear_completion_block(prompt, &input, &mut completion_lines, footer)?;
-                    print_terminal_newline()?;
-                    return Ok(None);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_completion_block(prompt, &input, &mut completion_lines, footer)?;
-                    print_terminal_newline()?;
-                    exit_process();
-                }
-                KeyCode::Backspace if input.pop().is_some() => {
-                    history_index = None;
-                    redraw_input_with_completion(prompt, &input, &mut completion_lines, footer)?;
-                }
-                KeyCode::Tab => {
-                    if let Some(completed) = complete_slash_command(&input) {
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                match paste_burst.observe_key(&key, Instant::now()) {
+                    PasteBurstAction::Handled => continue,
+                    PasteBurstAction::InsertNewline => {
                         history_index = None;
-                        input = completed;
+                        input.push('\n');
+                        redraw_input_with_completion(
+                            prompt,
+                            &input,
+                            &mut completion_lines,
+                            footer,
+                        )?;
+                        continue;
+                    }
+                    PasteBurstAction::None => {
+                        if apply_plain_paste_burst_flush(
+                            paste_burst.flush_before_modified_input(),
+                            &mut input,
+                            prompt,
+                            &mut completion_lines,
+                            footer,
+                            &project_dir,
+                        )? {
+                            history_index = None;
+                        }
+                    }
+                }
+
+                match key.code {
+                    KeyCode::Enter => {
+                        clear_completion_block(prompt, &input, &mut completion_lines, footer)?;
+                        print_terminal_newline()?;
+                        return Ok(Some(input));
+                    }
+                    KeyCode::Esc => {
+                        clear_completion_block(prompt, &input, &mut completion_lines, footer)?;
+                        print_terminal_newline()?;
+                        return Ok(None);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        clear_completion_block(prompt, &input, &mut completion_lines, footer)?;
+                        print_terminal_newline()?;
+                        exit_process();
+                    }
+                    KeyCode::Backspace if input.pop().is_some() => {
+                        history_index = None;
                         redraw_input_with_completion(
                             prompt,
                             &input,
@@ -1080,53 +1141,84 @@ fn read_line_with_history_manual_loop(
                             footer,
                         )?;
                     }
-                }
-                KeyCode::Up => {
-                    let Some(history) = history else {
-                        continue;
-                    };
-                    if history.is_empty() {
-                        continue;
-                    }
-                    let index = match history_index {
-                        Some(index) if index > 0 => index - 1,
-                        Some(index) => index,
-                        None => {
-                            draft = input.clone();
-                            history.len() - 1
+                    KeyCode::Tab => {
+                        if let Some(completed) = complete_slash_command(&input) {
+                            history_index = None;
+                            input = completed;
+                            redraw_input_with_completion(
+                                prompt,
+                                &input,
+                                &mut completion_lines,
+                                footer,
+                            )?;
                         }
-                    };
-                    history_index = Some(index);
-                    input = history[index].clone();
-                    redraw_input_with_completion(prompt, &input, &mut completion_lines, footer)?;
-                }
-                KeyCode::Down => {
-                    let Some(history) = history else {
-                        continue;
-                    };
-                    let Some(index) = history_index else {
-                        continue;
-                    };
-                    if index + 1 < history.len() {
-                        let next_index = index + 1;
-                        history_index = Some(next_index);
-                        input = history[next_index].clone();
-                    } else {
-                        history_index = None;
-                        input = draft.clone();
                     }
-                    redraw_input_with_completion(prompt, &input, &mut completion_lines, footer)?;
+                    KeyCode::Up => {
+                        let Some(history) = history else {
+                            continue;
+                        };
+                        if history.is_empty() {
+                            continue;
+                        }
+                        let index = match history_index {
+                            Some(index) if index > 0 => index - 1,
+                            Some(index) => index,
+                            None => {
+                                draft = input.clone();
+                                history.len() - 1
+                            }
+                        };
+                        history_index = Some(index);
+                        input = history[index].clone();
+                        redraw_input_with_completion(
+                            prompt,
+                            &input,
+                            &mut completion_lines,
+                            footer,
+                        )?;
+                    }
+                    KeyCode::Down => {
+                        let Some(history) = history else {
+                            continue;
+                        };
+                        let Some(index) = history_index else {
+                            continue;
+                        };
+                        if index + 1 < history.len() {
+                            let next_index = index + 1;
+                            history_index = Some(next_index);
+                            input = history[next_index].clone();
+                        } else {
+                            history_index = None;
+                            input = draft.clone();
+                        }
+                        redraw_input_with_completion(
+                            prompt,
+                            &input,
+                            &mut completion_lines,
+                            footer,
+                        )?;
+                    }
+                    KeyCode::Char(value) => {
+                        history_index = None;
+                        input.push(value);
+                        redraw_input_with_completion(
+                            prompt,
+                            &input,
+                            &mut completion_lines,
+                            footer,
+                        )?;
+                    }
+                    _ => {}
                 }
-                KeyCode::Char(value) => {
-                    history_index = None;
-                    input.push(value);
-                    redraw_input_with_completion(prompt, &input, &mut completion_lines, footer)?;
-                }
-                _ => {}
-            },
+            }
             Event::Paste(value) => {
+                paste_burst.mark_bracketed_paste_seen();
                 history_index = None;
-                input.push_str(&value);
+                match prepare_paste_text(&project_dir, &value) {
+                    Ok(prepared) => input.push_str(&prepared),
+                    Err(_) => input.push_str(&truncate_large_paste_fallback(&value)),
+                }
                 redraw_input_with_completion(prompt, &input, &mut completion_lines, footer)?;
             }
             Event::Resize(_, _) => {
@@ -1135,6 +1227,45 @@ fn read_line_with_history_manual_loop(
             _ => {}
         }
     }
+}
+
+fn flush_plain_paste_burst_if_due(
+    paste_burst: &mut PasteBurst,
+    input: &mut String,
+    prompt: &str,
+    completion_lines: &mut usize,
+    footer: Option<&FooterLines>,
+    project_dir: &std::path::Path,
+    now: Instant,
+) -> io::Result<bool> {
+    apply_plain_paste_burst_flush(
+        paste_burst.flush_if_due(now),
+        input,
+        prompt,
+        completion_lines,
+        footer,
+        project_dir,
+    )
+}
+
+fn apply_plain_paste_burst_flush(
+    result: FlushResult,
+    input: &mut String,
+    prompt: &str,
+    completion_lines: &mut usize,
+    footer: Option<&FooterLines>,
+    project_dir: &std::path::Path,
+) -> io::Result<bool> {
+    match result {
+        FlushResult::Paste(text) => match prepare_paste_text(project_dir, &text) {
+            Ok(prepared) => input.push_str(&prepared),
+            Err(_) => input.push_str(&truncate_large_paste_fallback(&text)),
+        },
+        FlushResult::Typed(ch) => input.push(ch),
+        FlushResult::None => return Ok(false),
+    }
+    redraw_input_with_completion(prompt, input, completion_lines, footer)?;
+    Ok(true)
 }
 
 fn redraw_input_with_completion(

@@ -1,10 +1,12 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use exgent_core::{tr, AppRuntimeHost, MessageId};
 
 use crate::commands::{parse_command, AppCommand};
 
 use super::clipboard_image::read_clipboard_image;
+use super::clipboard_text::read_clipboard_text;
 use super::forms::{active_add_model_field_mut, paste_theme_value};
+use super::key_shortcuts::is_paste_shortcut;
 use super::overlays::{
     open_auth_settings_overlay, open_language_picker_overlay, open_model_picker_overlay,
     open_model_settings_overlay, open_session_picker_overlay, open_theme_picker_overlay,
@@ -21,8 +23,8 @@ pub(super) fn handle_composer_key(
     key: KeyEvent,
     slash_selected: Option<usize>,
 ) -> UiAction {
-    if is_paste_image_key(&key) {
-        return paste_clipboard_image(app);
+    if is_paste_shortcut(&key) {
+        return paste_clipboard(app);
     }
 
     match key.code {
@@ -80,20 +82,23 @@ pub(super) fn handle_composer_key(
     UiAction::None
 }
 
-fn is_paste_image_key(key: &KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('v' | 'V'))
-        && (key.modifiers.contains(KeyModifiers::CONTROL)
-            || key.modifiers.contains(KeyModifiers::ALT))
-}
-
-fn paste_clipboard_image(app: &mut TuiApp) -> UiAction {
+fn paste_clipboard(app: &mut TuiApp) -> UiAction {
     match read_clipboard_image() {
         Ok(Some(image)) => {
             app.composer.insert_image(image);
             app.composer.history_index = None;
             app.sync_slash_menu();
+            return UiAction::None;
         }
         Ok(None) => {}
+        Err(error) => app.push_error(error),
+    }
+
+    match read_clipboard_text() {
+        Ok(Some(text)) if !text.is_empty() => {
+            app.insert_paste_text(&text);
+        }
+        Ok(_) => {}
         Err(error) => app.push_error(error),
     }
     UiAction::None
@@ -287,9 +292,7 @@ fn submit_input(
 pub(super) fn handle_paste(app: &mut TuiApp, value: &str) {
     if app.is_running {
         if matches!(app.overlay, Overlay::None | Overlay::SlashMenu { .. }) {
-            app.composer.insert_str(value);
-            app.composer.history_index = None;
-            app.sync_slash_menu();
+            app.insert_paste_text(value);
         }
         return;
     }
@@ -305,9 +308,7 @@ pub(super) fn handle_paste(app: &mut TuiApp, value: &str) {
             paste_theme_value(state, value);
         }
         Overlay::None | Overlay::SlashMenu { .. } => {
-            app.composer.insert_str(value);
-            app.composer.history_index = None;
-            app.sync_slash_menu();
+            app.insert_paste_text(value);
         }
         _ => {}
     }

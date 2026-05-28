@@ -13,8 +13,11 @@ mod formatting;
 mod forms;
 mod frame_rate_limiter;
 mod input;
+mod key_shortcuts;
 mod mouse_input;
 mod overlays;
+mod paste_burst;
+mod paste_text;
 mod plain;
 mod plain_auth;
 mod plain_events;
@@ -42,9 +45,11 @@ use selection::select_with_keys;
 type TuiRuntime = AppRuntimeHost;
 
 pub fn run_tui(runtime: &mut TuiRuntime) -> io::Result<()> {
+    terminal::configure_windows_console_utf8();
     app::run(runtime)
 }
 
 pub fn run_plain(runtime: &mut TuiRuntime) -> io::Result<()> {
+    terminal::configure_windows_console_utf8();
     plain::run(runtime)
 }

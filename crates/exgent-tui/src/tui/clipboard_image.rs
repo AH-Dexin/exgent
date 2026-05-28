@@ -1,5 +1,7 @@
+use std::env;
+#[cfg(not(target_os = "windows"))]
 use std::{
-    env, fs,
+    fs,
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -7,7 +9,10 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use exgent_core::ImageContent;
+#[cfg(target_os = "windows")]
+use image::{ColorType, ImageEncoder};
 
+#[cfg(not(target_os = "windows"))]
 const SUPPORTED_IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 pub(super) fn read_clipboard_image() -> Result<Option<ImageContent>, String> {
@@ -15,17 +20,26 @@ pub(super) fn read_clipboard_image() -> Result<Option<ImageContent>, String> {
         return Ok(None);
     }
 
+    let image = read_clipboard_image_raw();
+    Ok(image.map(|image| ImageContent::new(STANDARD.encode(image.bytes), image.mime_type)))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_clipboard_image_raw() -> Option<ClipboardImage> {
     let is_wsl = is_wsl();
     let is_wayland = is_wayland_session();
 
-    let image = if is_wayland || is_wsl {
+    if is_wayland || is_wsl {
         read_via_wl_paste().or_else(read_via_xclip)
     } else {
         read_via_xclip()
     }
-    .or_else(|| is_wsl.then(read_via_powershell_wsl).flatten());
+    .or_else(|| is_wsl.then(read_via_powershell_wsl).flatten())
+}
 
-    Ok(image.map(|image| ImageContent::new(STANDARD.encode(image.bytes), image.mime_type)))
+#[cfg(target_os = "windows")]
+fn read_clipboard_image_raw() -> Option<ClipboardImage> {
+    read_via_arboard()
 }
 
 struct ClipboardImage {
@@ -33,6 +47,40 @@ struct ClipboardImage {
     mime_type: String,
 }
 
+#[cfg(target_os = "windows")]
+fn read_via_arboard() -> Option<ClipboardImage> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let image = clipboard.get_image().ok()?;
+    let bytes = encode_rgba_as_png(image.width, image.height, image.bytes.as_ref())?;
+    Some(ClipboardImage {
+        bytes,
+        mime_type: "image/png".to_string(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn encode_rgba_as_png(width: usize, height: usize, bytes: &[u8]) -> Option<Vec<u8>> {
+    let width = u32::try_from(width).ok()?;
+    let height = u32::try_from(height).ok()?;
+    let expected = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    let mut rgba = bytes.to_vec();
+    if rgba.len() < expected {
+        rgba.resize(expected, 0);
+    } else if rgba.len() > expected {
+        rgba.truncate(expected);
+    }
+
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png);
+    encoder
+        .write_image(&rgba, width, height, ColorType::Rgba8.into())
+        .ok()?;
+    Some(png)
+}
+
+#[cfg(not(target_os = "windows"))]
 fn read_via_wl_paste() -> Option<ClipboardImage> {
     let list = command_output("wl-paste", &["--list-types"])?;
     let types = split_mime_types(&list);
@@ -44,6 +92,7 @@ fn read_via_wl_paste() -> Option<ClipboardImage> {
     })
 }
 
+#[cfg(not(target_os = "windows"))]
 fn read_via_xclip() -> Option<ClipboardImage> {
     let target_types = command_output("xclip", &["-selection", "clipboard", "-t", "TARGETS", "-o"])
         .map(|output| split_mime_types(&output))
@@ -72,6 +121,7 @@ fn read_via_xclip() -> Option<ClipboardImage> {
     None
 }
 
+#[cfg(not(target_os = "windows"))]
 fn read_via_powershell_wsl() -> Option<ClipboardImage> {
     let path = temp_png_path();
     let win_path = command_output("wslpath", &["-w", path.to_str()?])
@@ -105,6 +155,7 @@ fn read_via_powershell_wsl() -> Option<ClipboardImage> {
     })
 }
 
+#[cfg(not(target_os = "windows"))]
 fn command_output(command: &str, args: &[&str]) -> Option<Vec<u8>> {
     let output = Command::new(command).args(args).output().ok()?;
     if !output.status.success() || output.stdout.is_empty() {
@@ -113,6 +164,7 @@ fn command_output(command: &str, args: &[&str]) -> Option<Vec<u8>> {
     Some(output.stdout)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn split_mime_types(output: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(output)
         .lines()
@@ -122,6 +174,7 @@ fn split_mime_types(output: &[u8]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(not(target_os = "windows"))]
 fn select_preferred_image_mime_type(mime_types: &[String]) -> Option<String> {
     let normalized = mime_types
         .iter()
@@ -137,6 +190,7 @@ fn select_preferred_image_mime_type(mime_types: &[String]) -> Option<String> {
     None
 }
 
+#[cfg(not(target_os = "windows"))]
 fn base_mime_type(mime_type: &str) -> String {
     mime_type
         .split(';')
@@ -146,11 +200,13 @@ fn base_mime_type(mime_type: &str) -> String {
         .to_ascii_lowercase()
 }
 
+#[cfg(not(target_os = "windows"))]
 fn is_wayland_session() -> bool {
     env::var_os("WAYLAND_DISPLAY").is_some()
         || env::var("XDG_SESSION_TYPE").is_ok_and(|value| value == "wayland")
 }
 
+#[cfg(not(target_os = "windows"))]
 fn is_wsl() -> bool {
     if env::var_os("WSL_DISTRO_NAME").is_some() || env::var_os("WSLENV").is_some() {
         return true;
@@ -160,6 +216,7 @@ fn is_wsl() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn temp_png_path() -> PathBuf {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)

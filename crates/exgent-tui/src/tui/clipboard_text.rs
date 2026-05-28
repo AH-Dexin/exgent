@@ -5,6 +5,18 @@ use std::{
 
 use base64::{engine::general_purpose, Engine as _};
 
+#[cfg(target_os = "windows")]
+pub(super) fn read_clipboard_text() -> Result<Option<String>, String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| format!("failed to open clipboard: {error}"))?;
+    Ok(clipboard.get_text().ok())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn read_clipboard_text() -> Result<Option<String>, String> {
+    Ok(None)
+}
+
 pub(super) fn write_clipboard_text(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());

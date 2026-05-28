@@ -10,6 +10,7 @@ Thumbs.db
 # Local config and credentials
 .env
 .env.*
+.exgent/
 
 # Test and temp output
 *.tmp
